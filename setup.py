@@ -19,10 +19,28 @@ class CMakeBuildExtension(build_ext):
 
     def run(self):
         self.build_agfs()
+        self.copy_ov_binary()
         self.cmake_executable = CMAKE_PATH
 
         for ext in self.extensions:
             self.build_extension(ext)
+
+    def copy_ov_binary(self):
+        """Copy pre-built ov CLI binary to build_lib for wheel packaging.
+
+        The ov binary is built by CI (cargo build) and placed in openviking/bin/
+        before setup.py runs. Since openviking/bin/ is in .gitignore,
+        setuptools_scm's file finder won't include it automatically.
+        We must explicitly copy it to build_lib.
+        """
+        ov_bin_dir = Path("openviking/bin").resolve()
+        for binary_name in ["ov", "ov.exe"]:
+            src = ov_bin_dir / binary_name
+            if src.exists():
+                if self.build_lib:
+                    dst = Path(self.build_lib) / "openviking" / "bin" / binary_name
+                    self._copy_binary(src, dst)
+                    print(f"[OK] Copied {binary_name} to build_lib")
 
     def _copy_binary(self, src, dst):
         """Helper to copy binary and set permissions."""
