@@ -1,22 +1,14 @@
 """Feishu/Lark channel implementation using lark-oapi SDK with WebSocket long connection."""
 
 import asyncio
-import base64
 import io
 import json
 import re
-import os
-import threading
 import tempfile
+import threading
 from collections import OrderedDict
-from pathlib import Path
-from typing import Any, Tuple
-from urllib.parse import urlparse
+from typing import Any
 
-import httpx
-from loguru import logger
-
-from vikingbot.utils import get_data_path
 import httpx
 from loguru import logger
 
@@ -51,6 +43,9 @@ try:
         P2ImMessageReceiveV1,
         GetImageRequest,
         GetMessageResourceRequest,
+        ReplyMessageRequest,
+        ReplyMessageRequestBody,
+        GetChatRequest,
     )
 
     FEISHU_AVAILABLE = True
@@ -93,6 +88,7 @@ class FeishuChannel(BaseChannel):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tenant_access_token: str | None = None
         self._token_expire_time: float = 0
+        self._chat_mode_cache: dict[str, str] = {}  # 缓存群类型：group(普通群)/thread(话题群)
 
     async def _get_tenant_access_token(self) -> str:
         """Get tenant access token for Feishu API."""
@@ -122,7 +118,6 @@ class FeishuChannel(BaseChannel):
         """
         Upload image to Feishu media library and get image_key.
         """
-        import time
 
         token = await self._get_tenant_access_token()
         url = "https://open.feishu.cn/open-apis/im/v1/images"
@@ -133,12 +128,9 @@ class FeishuChannel(BaseChannel):
         files = {"image": ("image.png", io.BytesIO(image_data), "image/png")}
         data = {"image_type": "message"}
 
-        logger.debug(f"Uploading image to {url} with image_data {image_data[:20]}...")
-
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(url, headers=headers, data=data, files=files)
-            logger.debug(f"Upload response status: {resp.status_code}")
-            logger.debug(f"Upload response content: {resp.text}")
+            # logger.debug(f"Upload response status: {resp.status_code}")
             resp.raise_for_status()
             result = resp.json()
             if result.get("code") != 0:
@@ -185,13 +177,36 @@ class FeishuChannel(BaseChannel):
             f.write(image_bytes)
             temp_path = f.name
 
-        logger.debug(f"Saved image to temp file: {temp_path}")
         return temp_path
+
+    async def _get_chat_mode(self, chat_id: str) -> str:
+        """获取群类型：group(普通群)/thread(话题群)"""
+        if chat_id in self._chat_mode_cache:
+            return self._chat_mode_cache[chat_id]
+
+        if not self._client:
+            return "group"  # 默认普通群
+
+        try:
+            request = GetChatRequest.builder().chat_id(chat_id).build()
+            response = await self._client.im.v1.chat.aget(request)
+            if response.success():
+                chat_mode = getattr(response.data, "chat_mode", "group")
+                mode = "thread" if chat_mode == "topic" else "group"
+                self._chat_mode_cache[chat_id] = mode
+                return mode
+            logger.warning(f"Failed to get chat mode for {chat_id}: {response.msg}")
+        except Exception as e:
+            logger.warning(f"Error getting chat mode: {e}")
+
+        return "group"  # 失败默认普通群
 
     async def start(self) -> None:
         """Start the Feishu bot with WebSocket long connection."""
         if not FEISHU_AVAILABLE:
-            logger.exception("Feishu SDK not installed. Run: pip install lark-oapi")
+            logger.exception(
+                "Feishu SDK not installed. Install with: uv pip install 'vikingbot[feishu]' (or uv pip install -e \".[feishu]\" for local dev)"
+            )
             return
 
         if not self.config.app_id or not self.config.app_secret:
@@ -280,8 +295,6 @@ class FeishuChannel(BaseChannel):
 
             if not response.success():
                 logger.warning(f"Failed to add reaction: code={response.code}, msg={response.msg}")
-            else:
-                logger.debug(f"Added {emoji_type} reaction to message {message_id}")
         except Exception as e:
             logger.warning(f"Error adding reaction: {e}")
 
@@ -410,7 +423,6 @@ class FeishuChannel(BaseChannel):
             alt_text = m.group(1) or ""
             img_url = m.group(2)
             try:
-                logger.debug(f"Processing Markdown image: {img_url[:100]}...")
                 is_content, result = await self._parse_data_uri(img_url)
 
                 if not is_content and isinstance(result, bytes):
@@ -427,7 +439,6 @@ class FeishuChannel(BaseChannel):
         for m in re.finditer(send_pattern, content):
             img_url = m.group(1) or ""
             try:
-                logger.debug(f"Processing Markdown image: {img_url[:100]}...")
                 is_content, result = await self._parse_data_uri(img_url)
 
                 if not is_content and isinstance(result, bytes):
@@ -460,47 +471,140 @@ class FeishuChannel(BaseChannel):
             logger.warning("Feishu client not initialized")
             return
 
+        # Only send normal response messages, skip thinking/tool_call/etc.
+        if not msg.is_normal_message:
+            return
+
         try:
             # Determine receive_id_type based on chat_id format
             # open_id starts with "ou_", chat_id starts with "oc_"
-            if msg.session_key.chat_id.startswith("oc_"):
+            reply_to = msg.metadata.get("reply_to")
+            if reply_to.startswith("oc_"):
                 receive_id_type = "chat_id"
             else:
                 receive_id_type = "open_id"
-            logger.info(f"[DEBUG] Feishu send() content: {msg.content[:300]}")
 
-            # No images extracted from content, but content might still have Markdown images
-            elements = await self._process_content_with_images(
-                msg.content, receive_id_type, msg.session_key.chat_id
+            # Process images and get cleaned content
+            cleaned_content, images = await self._extract_and_upload_images(msg.content)
+
+            # Process @mentions: convert @ou_xxxx to Feishu mention format
+            # Pattern: @ou_xxxxxxx (user open_id)
+            import re
+
+            mention_pattern = r"@(ou_[a-zA-Z0-9_-]+)"
+
+            def replace_mention(match):
+                open_id = match.group(1)
+                return f'<at user_id="{open_id}">@{open_id}</at>'
+
+            # Replace all mentions
+            content_with_mentions = re.sub(mention_pattern, replace_mention, cleaned_content)
+
+            # Also support @all mention
+            content_with_mentions = content_with_mentions.replace(
+                "@all", '<at user_id="all">所有人</at>'
             )
-            card = {
-                "config": {"wide_screen_mode": True},
-                "elements": elements,
-            }
-            content = json.dumps(card, ensure_ascii=False)
 
-            request = (
-                CreateMessageRequest.builder()
-                .receive_id_type(receive_id_type)
-                .request_body(
-                    CreateMessageRequestBody.builder()
-                    .receive_id(msg.session_key.chat_id)
-                    .msg_type("interactive")
-                    .content(content)
+            # Check if we need to reply to a specific message
+            # Get reply message ID from metadata (original incoming message ID)
+            reply_to_message_id = None
+            if msg.metadata:
+                reply_to_message_id = msg.metadata.get("reply_to_message_id") or msg.metadata.get(
+                    "message_id"
+                )
+
+            # Build post message content
+            content_elements = []
+
+            # Add @mention for the original sender when replying
+            original_sender_id = None
+            chat_type = "group"
+            if reply_to_message_id and msg.metadata:
+                original_sender_id = msg.metadata.get("sender_id")
+                chat_type = msg.metadata.get("chat_type", "group")
+
+            # Build content line: [@mention, text content]
+            content_line = []
+
+            # Add @mention element for original sender when replying (only in group chats)
+            if original_sender_id and chat_type == "group":
+                content_line.append({"tag": "at", "user_id": original_sender_id})
+
+            # Add text content
+            if content_with_mentions.strip():
+                content_line.append({"tag": "text", "text": content_with_mentions})
+
+            # Add content line if not empty
+            if content_line:
+                content_elements.append(content_line)
+
+            # Add images
+            for img in images:
+                content_elements.append([{"tag": "img", "image_key": img["image_key"]}])
+
+            # Ensure we have content
+            if not content_elements:
+                content_elements.append([{"tag": "text", "text": " "}])
+
+            post_content = {"zh_cn": {"title": "", "content": content_elements}}
+
+            import json
+
+            content = json.dumps(post_content, ensure_ascii=False)
+
+            if reply_to_message_id:
+                # Reply to existing message (quotes the original)
+                # Only reply in thread if the original message is in a topic (has root_id and is a thread)
+                should_reply_in_thread = False
+                if msg.metadata:
+                    root_id = msg.metadata.get("root_id")
+                    # Only use reply_in_thread=True if this is an actual topic group thread
+                    # In Feishu, topic groups have root_id set for messages in threads
+                    # root_id will be set if the message is already part of a thread
+                    should_reply_in_thread = root_id is not None and root_id != reply_to_message_id
+
+                request = (
+                    ReplyMessageRequest.builder()
+                    .message_id(reply_to_message_id)
+                    .request_body(
+                        ReplyMessageRequestBody.builder()
+                        .content(content)
+                        .msg_type("post")
+                        # Only reply in topic thread if it's actually a topic thread (not regular group)
+                        .reply_in_thread(should_reply_in_thread)
+                        .build()
+                    )
                     .build()
                 )
-                .build()
-            )
-
-            response = self._client.im.v1.message.create(request)
+                response = self._client.im.v1.message.reply(request)
+            else:
+                # Send new message
+                request = (
+                    CreateMessageRequest.builder()
+                    .receive_id_type(receive_id_type)
+                    .request_body(
+                        CreateMessageRequestBody.builder()
+                        .receive_id(reply_to)
+                        .msg_type("post")
+                        .content(content)
+                        .build()
+                    )
+                    .build()
+                )
+                response = self._client.im.v1.message.create(request)
 
             if not response.success():
-                logger.exception(
-                    f"Failed to send Feishu message: code={response.code}, "
-                    f"msg={response.msg}, log_id={response.get_log_id()}"
-                )
-            else:
-                logger.debug(f"Feishu message sent to {msg.session_key.chat_id}")
+                if response.code == 230011:
+                    # Original message was withdrawn, just log warning
+                    logger.warning(
+                        f"Failed to reply to message: original message was withdrawn, code={response.code}, "
+                        f"msg={response.msg}, log_id={response.get_log_id()}"
+                    )
+                else:
+                    logger.exception(
+                        f"Failed to send Feishu message: code={response.code}, "
+                        f"msg={response.msg}, log_id={response.get_log_id()}"
+                    )
 
         except Exception as e:
             logger.exception(f"Error sending Feishu message: {e}")
@@ -546,11 +650,6 @@ class FeishuChannel(BaseChannel):
             # Parse message content and media
             content = ""
             media = []
-
-            # Log detailed message info for debugging
-            logger.info(
-                f"Received Feishu message: msg_type={msg_type}, content={message.content[:200]}"
-            )
 
             if msg_type == "text":
                 try:
@@ -621,8 +720,6 @@ class FeishuChannel(BaseChannel):
                                 logger.warning(
                                     f"Could not download image for image_key: {image_key}"
                                 )
-                    else:
-                        logger.warning(f"No image_key found in message content: {msg_content}")
                 except Exception as e:
                     logger.warning(f"Failed to download Feishu image: {e}")
                     import traceback
@@ -634,19 +731,75 @@ class FeishuChannel(BaseChannel):
             if not content:
                 return
 
+            import re
+
+            mention_pattern = re.compile(r"@_user_\d+")
+            content = mention_pattern.sub(f"@{sender_id}", content)
+
             # Forward to message bus
             reply_to = chat_id if chat_type == "group" else sender_id
+            logger.info(f"Received message from Feishu: {content}")
+
+            # 话题群处理：如果是话题群，首次消息root_id为空时，将当前消息id设为root_id
+            if chat_type == "group":
+                chat_mode = await self._get_chat_mode(chat_id)
+                if chat_mode == "thread" and not message.root_id:
+                    message.root_id = message.message_id
+                if message.root_id:
+                    chat_id = f"{reply_to}#{message.root_id}"
             await self._handle_message(
                 sender_id=sender_id,
-                chat_id=reply_to,
+                chat_id=chat_id,
                 content=content,
                 media=media if media else None,
                 metadata={
                     "message_id": message_id,
                     "chat_type": chat_type,
+                    "reply_to": reply_to,
                     "msg_type": msg_type,
+                    "root_id": message.root_id,  # Topic/thread ID for topic groups
+                    "sender_id": sender_id,  # Original message sender ID for @mention in replies
                 },
             )
 
         except Exception as e:
             logger.exception(f"Error processing Feishu message")
+
+    async def _extract_and_upload_images(self, content: str) -> tuple[str, list[dict]]:
+        """Extract images from markdown content, upload to Feishu, and return cleaned content."""
+        images = []
+        cleaned_content = content
+
+        # Pattern 1: ![alt](send://...)
+        markdown_pattern = r"!\[([^\]]*)\]\((send://[^)\s]+\.(png|jpeg|jpg|gif|bmp|webp))\)"
+        for m in re.finditer(markdown_pattern, content):
+            img_url = m.group(2)
+            try:
+                is_content, result = await self._parse_data_uri(img_url)
+
+                if not is_content and isinstance(result, bytes):
+                    image_key = await self._upload_image_to_feishu(result)
+                    images.append({"image_key": image_key})
+            except Exception as e:
+                logger.exception(f"Failed to upload Markdown image {img_url[:100]}: {e}")
+
+        # Remove markdown image syntax
+        cleaned_content = re.sub(markdown_pattern, "", cleaned_content)
+
+        # Pattern 2: send://... (without alt text)
+        send_pattern = r"(send://[^)\s]+\.(png|jpeg|jpg|gif|bmp|webp))\)?"
+        for m in re.finditer(send_pattern, content):
+            img_url = m.group(1) or ""
+            try:
+                is_content, result = await self._parse_data_uri(img_url)
+
+                if not is_content and isinstance(result, bytes):
+                    image_key = await self._upload_image_to_feishu(result)
+                    images.append({"image_key": image_key})
+            except Exception as e:
+                logger.exception(f"Failed to upload Markdown image {img_url[:100]}: {e}")
+
+        # Remove standalone send:// URLs
+        cleaned_content = re.sub(send_pattern, "", cleaned_content)
+
+        return cleaned_content.strip(), images

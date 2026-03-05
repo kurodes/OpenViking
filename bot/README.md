@@ -1,7 +1,16 @@
-
 # Vikingbot
 
 **Vikingbot**, built on the [Nanobot](https://github.com/HKUDS/nanobot) project, is designed to deliver an OpenClaw-like bot integrated with OpenViking.
+
+## ✨ Core Features of OpenViking
+
+Vikingbot is deeply integrated with OpenViking, providing powerful knowledge management and memory retrieval capabilities:
+
+- **Dual local/remote modes**: Supports local storage (`~/.openviking/data/`) and remote server mode
+- **7 dedicated Agent tools**: Resource management, semantic search, regex search, glob search, memory search
+- **Three-level content access**: L0 (summary), L1 (overview), L2 (full content)
+- **Automatic session memory submission**: Conversation history is automatically saved to OpenViking
+- **Model configuration**: Read from OpenViking configuration (`vlm` section), no need to set provider separately in bot configuration
 
 ## 📦 Install
 
@@ -24,15 +33,44 @@ git clone https://github.com/volcengine/OpenViking
 cd OpenViking/bot
 
 # Create a virtual environment using Python 3.11 or higher
-# uv will automatically fetch the required Python version if it's missing
 uv venv --python 3.11
 
 # Activate environment
 source .venv/bin/activate  # macOS/Linux
 # .venv\Scripts\activate   # Windows
 
-# Install dependencies
+# Install dependencies (minimal)
 uv pip install -e .
+
+# Or install with optional features
+uv pip install -e ".[langfuse,telegram,console]"
+```
+
+### Optional Dependencies
+
+Install only the features you need:
+
+| Feature Group | Install Command | Description |
+|---------------|-----------------|-------------|
+| **Full** | `uv pip install -e ".[full]"` | All features included |
+| **Langfuse** | `uv pip install -e ".[langfuse]"` | LLM observability and tracing |
+| **FUSE** | `uv pip install -e ".[fuse]"` | OpenViking filesystem mount |
+| **Sandbox** | `uv pip install -e ".[sandbox]"` | Code execution sandbox |
+| **OpenCode** | `uv pip install -e ".[opencode]"` | OpenCode AI integration |
+
+#### Channels (chat apps)
+
+| Channel | Install Command |
+|---------|-----------------|
+| **Telegram** | `uv pip install -e ".[telegram]"` |
+| **Feishu/Lark** | `uv pip install -e ".[feishu]"` |
+| **DingTalk** | `uv pip install -e ".[dingtalk]"` |
+| **Slack** | `uv pip install -e ".[slack]"` |
+| **QQ** | `uv pip install -e ".[qq]"` |
+
+Multiple features can be combined:
+```bash
+uv pip install -e ".[langfuse,telegram,console]"
 ```
 
 ## 🚀 Quick Start
@@ -48,7 +86,8 @@ vikingbot gateway
 ```
 
 This will automatically:
-- Create a default config at `~/.vikingbot/config.json`
+- Create a default config at `~/.openviking/ov.conf`
+- Create bot startup files in the OpenViking workspace, default path is `~/.openviking/data/bot/`
 - Start the Console Web UI at http://localhost:18791
 
 **2. Configure via Console**
@@ -61,7 +100,17 @@ Open http://localhost:18791 in your browser and:
 **3. Chat**
 
 ```bash
-vikingbot agent -m "What is 2+2?"
+# Send a single message directly
+vikingbot chat -m "What is 2+2?"
+
+# Enter interactive chat mode (supports multi-turn conversations)
+vikingbot chat
+
+# Show plain-text replies (no Markdown rendering)
+vikingbot chat --no-markdown
+
+# Show runtime logs during chat (useful for debugging)
+vikingbot chat --logs
 ```
 
 That's it! You have a working AI assistant in 2 minutes.
@@ -70,17 +119,6 @@ That's it! You have a working AI assistant in 2 minutes.
 
 You can also deploy vikingbot using Docker for easier setup and isolation.
 
-## ☁️ Volcengine VKE Deployment
-
-If you want to deploy vikingbot on Volcengine Kubernetes Engine (VKE), see the detailed deployment guide:
-
-👉 [VKE Deployment Guide (Chinese)](deploy/vke/README.md)
-
-The guide includes:
-- Complete prerequisites
-- How to create Volcengine account, VKE cluster, container registry, and TOS bucket
-- One-click deployment script usage
-- Configuration details and troubleshooting
 ### Prerequisites
 
 First, install Docker:
@@ -93,19 +131,19 @@ Verify Docker installation:
 docker --version
 ```
 
-### Quick Volcengine Registry Deploy (Recommended)
+### Quick Volcengine Image Registry Deployment (Recommended)
 ### Quick Docker Deploy
 
 ```bash
 # 1. Create necessary directories
-mkdir -p ~/.vikingbot/
+mkdir -p ~/.openviking/
 
 # 2. Start container
 docker run -d \
     --name vikingbot \
     --restart unless-stopped \
     --platform linux/amd64 \
-    -v ~/.vikingbot:/root/.vikingbot \
+    -v ~/.openviking:/root/.openviking \
     -p 18791:18791 \
     vikingbot-cn-beijing.cr.volces.com/vikingbot/vikingbot:latest \
     gateway
@@ -133,421 +171,9 @@ If you want to build the Docker image locally:
 
 For more Docker deployment options, see [deploy/docker/README.md](deploy/docker/README.md).
 
-## 💬 Chat Apps
-
 Talk to your vikingbot through Telegram, Discord, WhatsApp, Feishu, Mochat, DingTalk, Slack, Email, or QQ — anytime, anywhere.
 
-| Channel | Setup |
-|---------|-------|
-| **Telegram** | Easy (just a token) |
-| **Discord** | Easy (bot token + intents) |
-| **WhatsApp** | Medium (scan QR) |
-| **Feishu** | Medium (app credentials) |
-| **Mochat** | Medium (claw token + websocket) |
-| **DingTalk** | Medium (app credentials) |
-| **Slack** | Medium (bot + app tokens) |
-| **Email** | Medium (IMAP/SMTP credentials) |
-| **QQ** | Easy (app credentials) |
-
-<details>
-<summary><b>Telegram</b> (Recommended)</summary>
-
-**1. Create a bot**
-- Open Telegram, search `@BotFather`
-- Send `/newbot`, follow prompts
-- Copy the token
-
-**2. Configure**
-
-```json
-{
-  "channels": [
-    {
-      "type": "telegram",
-      "enabled": true,
-      "token": "YOUR_BOT_TOKEN",
-      "allowFrom": ["YOUR_USER_ID"]
-    }
-  ]
-}
-```
-
-> You can find your **User ID** in Telegram settings. It is shown as `@yourUserId`.
-> Copy this value **without the `@` symbol** and paste it into the config file.
-
-
-**3. Run**
-
-```bash
-vikingbot gateway
-```
-
-</details>
-
-<details>
-<summary><b>Mochat (Claw IM)</b></summary>
-
-Uses **Socket.IO WebSocket** by default, with HTTP polling fallback.
-
-**1. Ask vikingbot to set up Mochat for you**
-
-Simply send this message to vikingbot (replace `xxx@xxx` with your real email):
-
-```
-Read https://raw.githubusercontent.com/HKUDS/MoChat/refs/heads/main/skills/vikingbot/skill.md and register on MoChat. My Email account is xxx@xxx Bind me as your owner and DM me on MoChat.
-```
-
-vikingbot will automatically register, configure `~/.vikingbot/config.json`, and connect to Mochat.
-
-**2. Restart gateway**
-
-```bash
-vikingbot gateway
-```
-
-That's it — vikingbot handles the rest!
-
-<br>
-
-<details>
-<summary>Manual configuration (advanced)</summary>
-
-If you prefer to configure manually, add the following to `~/.vikingbot/config.json`:
-
-> Keep `claw_token` private. It should only be sent in `X-Claw-Token` header to your Mochat API endpoint.
-
-```json
-{
-  "channels": [
-    {
-      "type": "mochat",
-      "enabled": true,
-      "base_url": "https://mochat.io",
-      "socket_url": "https://mochat.io",
-      "socket_path": "/socket.io",
-      "claw_token": "claw_xxx",
-      "agent_user_id": "6982abcdef",
-      "sessions": ["*"],
-      "panels": ["*"],
-      "reply_delay_mode": "non-mention",
-      "reply_delay_ms": 120000
-    }
-  ]
-}
-```
-
-
-
-</details>
-
-</details>
-
-<details>
-<summary><b>Discord</b></summary>
-
-**1. Create a bot**
-- Go to https://discord.com/developers/applications
-- Create an application → Bot → Add Bot
-- Copy the bot token
-
-**2. Enable intents**
-- In the Bot settings, enable **MESSAGE CONTENT INTENT**
-- (Optional) Enable **SERVER MEMBERS INTENT** if you plan to use allow lists based on member data
-
-**3. Get your User ID**
-- Discord Settings → Advanced → enable **Developer Mode**
-- Right-click your avatar → **Copy User ID**
-
-**4. Configure**
-
-```json
-{
-  "channels": [
-    {
-      "type": "discord",
-      "enabled": true,
-      "token": "YOUR_BOT_TOKEN",
-      "allowFrom": ["YOUR_USER_ID"]
-    }
-  ]
-}
-```
-
-**5. Invite the bot**
-- OAuth2 → URL Generator
-- Scopes: `bot`
-- Bot Permissions: `Send Messages`, `Read Message History`
-- Open the generated invite URL and add the bot to your server
-
-**6. Run**
-
-```bash
-vikingbot gateway
-```
-
-</details>
-
-<details>
-<summary><b>WhatsApp</b></summary>
-
-Requires **Node.js ≥18**.
-
-**1. Link device**
-
-```bash
-vikingbot channels login
-# Scan QR with WhatsApp → Settings → Linked Devices
-```
-
-**2. Configure**
-
-```json
-{
-  "channels": [
-    {
-      "type": "whatsapp",
-      "enabled": true,
-      "allowFrom": ["+1234567890"]
-    }
-  ]
-}
-```
-
-**3. Run** (two terminals)
-
-```bash
-# Terminal 1
-vikingbot channels login
-
-# Terminal 2
-vikingbot gateway
-```
-
-</details>
-
-<details>
-<summary><b>Feishu (飞书)</b></summary>
-
-Uses **WebSocket** long connection — no public IP required.
-
-**1. Create a Feishu bot**
-- Visit [Feishu Open Platform](https://open.feishu.cn/app)
-- Create a new app → Enable **Bot** capability
-- **Permissions**: Add `im:message` (send messages)
-- **Events**: Add `im.message.receive_v1` (receive messages)
-  - Select **Long Connection** mode (requires running vikingbot first to establish connection)
-- Get **App ID** and **App Secret** from "Credentials & Basic Info"
-- Publish the app
-
-**2. Configure**
-
-```json
-{
-  "channels": [
-    {
-      "type": "feishu",
-      "enabled": true,
-      "appId": "cli_xxx",
-      "appSecret": "xxx",
-      "encryptKey": "",
-      "verificationToken": "",
-      "allowFrom": []
-    }
-  ]
-}
-```
-
-> `encryptKey` and `verificationToken` are optional for Long Connection mode.
-> `allowFrom`: Leave empty to allow all users, or add `["ou_xxx"]` to restrict access.
-
-**3. Run**
-
-```bash
-vikingbot gateway
-```
-
-> [!TIP]
-> Feishu uses WebSocket to receive messages — no webhook or public IP needed!
-
-</details>
-
-<details>
-<summary><b>QQ (QQ单聊)</b></summary>
-
-Uses **botpy SDK** with WebSocket — no public IP required. Currently supports **private messages only**.
-
-**1. Register & create bot**
-- Visit [QQ Open Platform](https://q.qq.com) → Register as a developer (personal or enterprise)
-- Create a new bot application
-- Go to **开发设置 (Developer Settings)** → copy **AppID** and **AppSecret**
-
-**2. Set up sandbox for testing**
-- In the bot management console, find **沙箱配置 (Sandbox Config)**
-- Under **在消息列表配置**, click **添加成员** and add your own QQ number
-- Once added, scan the bot's QR code with mobile QQ → open the bot profile → tap "发消息" to start chatting
-
-**3. Configure**
-
-> - `allowFrom`: Leave empty for public access, or add user openids to restrict. You can find openids in the vikingbot logs when a user messages the bot.
-> - For production: submit a review in the bot console and publish. See [QQ Bot Docs](https://bot.q.qq.com/wiki/) for the full publishing flow.
-
-```json
-{
-  "channels": [
-    {
-      "type": "qq",
-      "enabled": true,
-      "appId": "YOUR_APP_ID",
-      "secret": "YOUR_APP_SECRET",
-      "allowFrom": []
-    }
-  ]
-}
-```
-
-**4. Run**
-
-```bash
-vikingbot gateway
-```
-
-Now send a message to the bot from QQ — it should respond!
-
-</details>
-
-<details>
-<summary><b>DingTalk (钉钉)</b></summary>
-
-Uses **Stream Mode** — no public IP required.
-
-**1. Create a DingTalk bot**
-- Visit [DingTalk Open Platform](https://open-dev.dingtalk.com/)
-- Create a new app -> Add **Robot** capability
-- **Configuration**:
-  - Toggle **Stream Mode** ON
-- **Permissions**: Add necessary permissions for sending messages
-- Get **AppKey** (Client ID) and **AppSecret** (Client Secret) from "Credentials"
-- Publish the app
-
-**2. Configure**
-
-```json
-{
-  "channels": [
-    {
-      "type": "dingtalk",
-      "enabled": true,
-      "clientId": "YOUR_APP_KEY",
-      "clientSecret": "YOUR_APP_SECRET",
-      "allowFrom": []
-    }
-  ]
-}
-```
-
-> `allowFrom`: Leave empty to allow all users, or add `["staffId"]` to restrict access.
-
-**3. Run**
-
-```bash
-vikingbot gateway
-```
-
-</details>
-
-<details>
-<summary><b>Slack</b></summary>
-
-Uses **Socket Mode** — no public URL required.
-
-**1. Create a Slack app**
-- Go to [Slack API](https://api.slack.com/apps) → **Create New App** → "From scratch"
-- Pick a name and select your workspace
-
-**2. Configure the app**
-- **Socket Mode**: Toggle ON → Generate an **App-Level Token** with `connections:write` scope → copy it (`xapp-...`)
-- **OAuth & Permissions**: Add bot scopes: `chat:write`, `reactions:write`, `app_mentions:read`
-- **Event Subscriptions**: Toggle ON → Subscribe to bot events: `message.im`, `message.channels`, `app_mention` → Save Changes
-- **App Home**: Scroll to **Show Tabs** → Enable **Messages Tab** → Check **"Allow users to send Slash commands and messages from the messages tab"**
-- **Install App**: Click **Install to Workspace** → Authorize → copy the **Bot Token** (`xoxb-...`)
-
-**3. Configure vikingbot**
-
-```json
-{
-  "channels": [
-    {
-      "type": "slack",
-      "enabled": true,
-      "botToken": "xoxb-...",
-      "appToken": "xapp-...",
-      "groupPolicy": "mention"
-    }
-  ]
-}
-```
-
-**4. Run**
-
-```bash
-vikingbot gateway
-```
-
-DM the bot directly or @mention it in a channel — it should respond!
-
-> [!TIP]
-> - `groupPolicy`: `"mention"` (default — respond only when @mentioned), `"open"` (respond to all channel messages), or `"allowlist"` (restrict to specific channels).
-> - DM policy defaults to open. Set `"dm": {"enabled": false}` to disable DMs.
-
-</details>
-
-<details>
-<summary><b>Email</b></summary>
-
-Give vikingbot its own email account. It polls **IMAP** for incoming mail and replies via **SMTP** — like a personal email assistant.
-
-**1. Get credentials (Gmail example)**
-- Create a dedicated Gmail account for your bot (e.g. `my-vikingbot@gmail.com`)
-- Enable 2-Step Verification → Create an [App Password](https://myaccount.google.com/apppasswords)
-- Use this app password for both IMAP and SMTP
-
-**2. Configure**
-
-> - `consentGranted` must be `true` to allow mailbox access. This is a safety gate — set `false` to fully disable.
-> - `allowFrom`: Leave empty to accept emails from anyone, or restrict to specific senders.
-> - `smtpUseTls` and `smtpUseSsl` default to `true` / `false` respectively, which is correct for Gmail (port 587 + STARTTLS). No need to set them explicitly.
-> - Set `"autoReplyEnabled": false` if you only want to read/analyze emails without sending automatic replies.
-
-```json
-{
-  "channels": [
-    {
-      "type": "email",
-      "enabled": true,
-      "consentGranted": true,
-      "imapHost": "imap.gmail.com",
-      "imapPort": 993,
-      "imapUsername": "my-vikingbot@gmail.com",
-      "imapPassword": "your-app-password",
-      "smtpHost": "smtp.gmail.com",
-      "smtpPort": 587,
-      "smtpUsername": "my-vikingbot@gmail.com",
-      "smtpPassword": "your-app-password",
-      "fromAddress": "my-vikingbot@gmail.com",
-      "allowFrom": ["your-real-email@gmail.com"]
-    }
-  ]
-}
-```
-
-
-**3. Run**
-
-```bash
-vikingbot gateway
-```
-
-</details>
+For detailed configuration, please refer to [CHANNEL.md](bot/docs/CHANNEL.md).
 
 ## 🌐 Agent Social Network
 
@@ -562,11 +188,106 @@ Simply send the command above to your vikingbot (via CLI or any chat channel), a
 
 ## ⚙️ Configuration
 
-Config file: `~/.vikingbot/config.json`
+Config file: `~/.openviking/ov.conf` (custom path can be set via environment variable `OPENVIKING_CONFIG_FILE`)
+
+> [!TIP]
+> Vikingbot shares the same configuration file with OpenViking. Configuration items are located under the `bot` field of the file, and will automatically merge global configurations such as `vlm`, `storage`, `server`, etc. No need to maintain a separate configuration file.
 
 > [!IMPORTANT]
 > After modifying the configuration (either via Console UI or by editing the file directly),
 > you need to restart the gateway service for changes to take effect.
+
+### OpenViking Server Configuration
+The bot will connect to the remote OpenViking server. Please start the OpenViking Server before use. By default, the OpenViking server information configured in `ov.conf` is used
+- OpenViking default startup address is 127.0.0.1:1933
+- If `root_api_key` is configured, multi-tenant mode is enabled. For details, see [Multi-tenant](https://github.com/volcengine/OpenViking/blob/main/examples/multi_tenant/README.md)
+- OpenViking Server configuration example
+```json
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 1933,
+    "root_api_key": "test"
+  }
+}
+```
+
+### Bot Configuration
+All configurations are under the `bot` field in `ov.conf`, with default values for configuration items. The optional manual configuration items are described as follows:
+- `agents`: Agent configuration
+  - `max_tool_iterations`: Maximum number of cycles for a single round of conversation tasks, returns results directly if exceeded
+  - `memory_window`: Upper limit of conversation rounds for automatically submitting sessions to OpenViking
+  - `gen_image_model`: Model for generating images
+- `gateway`: Gateway configuration
+  - `host`: Gateway listening address, default value is `0.0.0.0`
+  - `port`: Gateway listening port, default value is `18790`
+- `sandbox`: Sandbox configuration
+  - `mode`: Sandbox mode, optional values are `shared` (all sessions share workspace) or `private` (private, workspace isolated by Channel and session). Default value is `shared`.
+- `ov_server`: OpenViking Server configuration.
+  - If not configured, the OpenViking server information configured in `ov.conf` is used by default
+  - If you don't use the locally started OpenViking Server, you can configure the url and the corresponding root user's API Key here
+- `channels`: Message platform configuration, see [Message Platform Configuration](bot/docs/CHANNEL.md) for details
+
+```json
+{
+  "bot": {
+    "agents": {
+      "max_tool_iterations": 50,
+      "memory_window": 50,
+      "gen_image_model": "openai/doubao-seedream-4-5-251128"
+    },
+    "gateway": {
+      "host": "0.0.0.0",
+      "port": 18790
+    },
+    "sandbox": {
+      "mode": "shared"
+    },
+    "ov_server": {
+      "server_url": "http://127.0.0.1:1933",
+      "root_api_key": "test"
+    },
+    "channels": [
+      {
+        "type": "feishu",
+        "enabled": true,
+        "appId": "",
+        "appSecret": "",
+        "allowFrom": []
+      }
+    ]
+  }
+}
+```
+
+### OpenViking Agent Tools
+
+Vikingbot provides 7 dedicated OpenViking tools:
+
+| Tool Name | Description |
+|----------|------|
+| `openviking_read` | Read OpenViking resources (supports three levels: abstract/overview/read) |
+| `openviking_list` | List OpenViking resources |
+| `openviking_search` | Semantic search OpenViking resources |
+| `openviking_add_resource` | Add local files as OpenViking resources |
+| `openviking_grep` | Search OpenViking resources using regular expressions |
+| `openviking_glob` | Match OpenViking resources using glob patterns |
+| `user_memory_search` | Search OpenViking user memory |
+
+### OpenViking Hooks
+
+Vikingbot enables OpenViking hooks by default:
+
+```json
+{
+  "hooks": ["vikingbot.hooks.builtins.openviking_hooks.hooks"]
+}
+```
+
+| Hook | Function |
+|------|------|
+| `OpenVikingCompactHook` | Automatically submit session messages to OpenViking |
+| `OpenVikingPostCallHook` | Post tool call hook (for testing purposes) |
 
 ### Manual Configuration (Advanced)
 
@@ -574,18 +295,15 @@ If you prefer to edit the config file directly instead of using the Console UI:
 
 ```json
 {
-  "providers": {
-    "openai": {
-      "apiKey": "sk-xxx"
-    }
-  },
-  "agents": {
-    "defaults": {
+  "bot": {
+    "agents": {
       "model": "openai/doubao-seed-2-0-pro-260215"
     }
   }
 }
 ```
+
+Provider configuration is read from OpenViking config (`vlm` section in `ov.conf`).
 
 ### Providers
 
@@ -661,62 +379,212 @@ That's it! Environment variables, model prefixing, config matching, and `vikingb
 | `tools.restrictToWorkspace` | `true` | When `true`, restricts **all** agent tools (shell, file read/write/edit, list) to the workspace directory. Prevents path traversal and out-of-scope access. |
 | `channels.*.allowFrom` | `[]` (allow all) | Whitelist of user IDs. Empty = allow everyone; non-empty = only listed users can interact. |
 
-### Sandbox
+### Observability (Optional)
 
-vikingbot supports sandboxed execution for enhanced security. By default, sandbox is disabled. To enable sandbox with SRT backend in per-session mode, set `"enabled": true`.
+**Langfuse** integration for LLM observability and tracing.
 
 <details>
-<summary><b>Sandbox Configuration (SRT Backend)</b></summary>
+<summary><b>Langfuse Configuration</b></summary>
+
+**Option 1: Local Deployment (Recommended for testing)**
+
+Deploy Langfuse locally using Docker:
+
+```bash
+# Navigate to the deployment script
+cd deploy/docker
+
+# Run the deployment script
+./deploy_langfuse.sh
+```
+
+This will start Langfuse locally at `http://localhost:3000` with pre-configured credentials.
+
+**Option 2: Langfuse Cloud**
+
+1. Sign up at [langfuse.com](https://langfuse.com)
+2. Create a new project
+3. Copy the **Secret Key** and **Public Key** from project settings
+
+**Configuration**
+
+Add to `~/.openviking/ov.conf`:
 
 ```json
 {
-  "sandbox": {
-    "enabled": false,
-    "backend": "srt",
-    "mode": "per-session",
-    "network": {
-      "allowedDomains": [],
-      "deniedDomains": [],
-      "allowLocalBinding": false
-    },
-    "filesystem": {
-      "denyRead": [],
-      "allowWrite": [],
-      "denyWrite": []
-    },
-    "runtime": {
-      "cleanupOnExit": true,
-      "timeout": 300
-    },
-    "backends": {
-      "srt": {
-        "nodePath": "node"
+  "bot": {
+    "langfuse": {
+      "enabled": true,
+      "secret_key": "sk-lf-vikingbot-secret-key-2026",
+      "public_key": "pk-lf-vikingbot-public-key-2026",
+      "base_url": "http://localhost:3000"
+    }
+  }
+}
+```
+
+For Langfuse Cloud, use `https://cloud.langfuse.com` as the `base_url`.
+
+**Install Langfuse support:**
+```bash
+uv pip install -e ".[langfuse]"
+```
+
+**Restart vikingbot:**
+```bash
+vikingbot gateway
+```
+
+**Features enabled:**
+- Automatic trace creation for each conversation
+- Session and user tracking
+- LLM call monitoring
+- Token usage tracking
+
+</details>
+
+### Sandbox
+
+vikingbot supports sandboxed execution for enhanced security.
+
+**By default, no sandbox configuration is needed in `ov.conf`:**
+- Default backend: `direct` (runs code directly on host)
+- Default mode: `shared` (single sandbox shared across all sessions)
+
+You only need to add sandbox configuration when you want to change these defaults.
+
+<details>
+<summary><b>Sandbox Configuration Options</b></summary>
+
+**To use a different backend or mode:**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "opensandbox",
+      "mode": "per-session"
+    }
+  }
+}
+```
+
+**Available Backends:**
+| Backend | Description |
+|---------|-------------|
+| `direct` | (Default) Runs code directly on the host |
+| `docker` | Uses Docker containers for isolation |
+| `opensandbox` | Uses OpenSandbox service |
+| `srt` | Uses Anthropic's SRT sandbox runtime |
+| `aiosandbox` | Uses AIO Sandbox service |
+
+**Available Modes:**
+| Mode | Description |
+|------|-------------|
+| `shared` | (Default) Single sandbox shared across all sessions |
+| `per-session` | Separate sandbox instance for each session |
+
+**Backend-specific Configuration (only needed when using that backend):**
+
+**Direct Backend:**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backends": {
+        "direct": {
+          "restrictToWorkspace": false
+        }
       }
     }
   }
 }
 ```
 
-**Configuration Options:**
+**OpenSandbox Backend:**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "opensandbox",
+      "backends": {
+        "opensandbox": {
+          "serverUrl": "http://localhost:18792",
+          "apiKey": "",
+          "defaultImage": "opensandbox/code-interpreter:v1.0.1"
+        }
+      }
+    }
+  }
+}
+```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `enabled` | `false` | Enable sandbox execution |
-| `backend` | `"srt"` | Sandbox backend: `srt` or `docker` |
-| `mode` | `"per-session"` | Sandbox mode: `per-session` (isolated per session) or `shared` (shared across sessions) |
-| `network.allowedDomains` | `[]` | List of allowed domains for network access (empty = all allowed) |
-| `network.deniedDomains` | `[]` | List of denied domains (blocked regardless of allowed list) |
-| `network.allowLocalBinding` | `false` | Allow binding to local addresses (localhost, 127.0.0.1) |
-| `filesystem.denyRead` | `[]` | Paths/files to deny read access |
-| `filesystem.allowWrite` | `[]` | Paths/files to explicitly allow write access |
-| `filesystem.denyWrite` | `[]` | Paths/files to deny write access |
-| `runtime.cleanupOnExit` | `true` | Clean up sandbox resources on exit |
-| `runtime.timeout` | `300` | Command execution timeout in seconds |
-| `backends.srt.nodePath` | `"/usr/local/bin/node"` | Path to Node.js executable (use full path if `node` is not in PATH) |
+**Docker Backend:**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "docker",
+      "backends": {
+        "docker": {
+          "image": "python:3.11-slim",
+          "networkMode": "bridge"
+        }
+      }
+    }
+  }
+}
+```
+
+**SRT Backend:**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "srt",
+      "backends": {
+        "srt": {
+          "settingsPath": "~/.vikingbot/srt-settings.json",
+          "nodePath": "node",
+          "network": {
+            "allowedDomains": [],
+            "deniedDomains": [],
+            "allowLocalBinding": false
+          },
+          "filesystem": {
+            "denyRead": [],
+            "allowWrite": [],
+            "denyWrite": []
+          },
+          "runtime": {
+            "cleanupOnExit": true,
+            "timeout": 300
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**AIO Sandbox Backend:**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "aiosandbox",
+      "backends": {
+        "aiosandbox": {
+          "baseUrl": "http://localhost:18794"
+        }
+      }
+    }
+  }
+}
+```
 
 **SRT Backend Setup:**
 
-The SRT backend uses `@anthropic-ai/sandbox-runtime`. It's automatically installed when you run `vikingbot onboard`.
+The SRT backend uses `@anthropic-ai/sandbox-runtime`.
 
 **System Dependencies:**
 
@@ -758,10 +626,12 @@ If `node` command is not found in PATH, specify the full path in your config:
 
 ```json
 {
-  "sandbox": {
-    "backends": {
-      "srt": {
-        "nodePath": "/usr/local/bin/node"
+  "bot": {
+    "sandbox": {
+      "backends": {
+        "srt": {
+          "nodePath": "/usr/local/bin/node"
+        }
       }
     }
   }
@@ -783,11 +653,10 @@ which nodejs
 
 | Command | Description |
 |---------|-------------|
-| `vikingbot agent -m "..."` | Chat with the agent |
-| `vikingbot agent` | Interactive chat mode |
-| `vikingbot agent --no-markdown` | Show plain-text replies |
-| `vikingbot agent --logs` | Show runtime logs during chat |
-| `vikingbot tui` | Launch TUI (Terminal User Interface) |
+| `vikingbot chat -m "..."` | Chat with the agent |
+| `vikingbot chat` | Interactive chat mode |
+| `vikingbot chat --no-markdown` | Show plain-text replies |
+| `vikingbot chat --logs` | Show runtime logs during chat |
 | `vikingbot gateway` | Start the gateway and Console Web UI |
 | `vikingbot status` | Show status |
 | `vikingbot channels login` | Link WhatsApp (scan QR) |
@@ -809,23 +678,6 @@ The Console Web UI is automatically started when you run `vikingbot gateway`, ac
 > After saving configuration changes in the Console, you need to restart the gateway service for changes to take effect.
 
 Interactive mode exits: `exit`, `quit`, `/exit`, `/quit`, `:q`, or `Ctrl+D`.
-
-<details>
-<summary><b>TUI (Terminal User Interface)</b></summary>
-
-Launch the vikingbot TUI for a rich terminal-based chat experience:
-
-```bash
-vikingbot tui
-```
-
-The TUI provides:
-- Rich text rendering with markdown support
-- Message history and conversation management
-- Real-time agent responses
-- Keyboard shortcuts for navigation
-
-</details>
 
 <details>
 <summary><b>Scheduled Tasks (Cron)</b></summary>

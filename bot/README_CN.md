@@ -7,11 +7,11 @@
 
 Vikingbot 深度集成 OpenViking，提供强大的知识管理和记忆检索能力：
 
-- **本地/远程双模式**：支持本地存储（`~/.vikingbot/ov_data/`）和远程服务器模式
+- **本地/远程双模式**：支持本地存储（`~/.openviking/data/`）和远程服务器模式
 - **7 个专用 Agent 工具**：资源管理、语义搜索、正则搜索、通配符搜索、记忆搜索
 - **三级内容访问**：L0（摘要）、L1（概览）、L2（完整内容）
 - **会话记忆自动提交**：对话历史自动保存到 OpenViking
-- **火山引擎 TOS 集成**：远程模式下支持云存储
+- **模型配置**：从 OpenViking 配置（`vlm` 部分）读取，无需在 bot 配置中单独设置 provider
 
 ## 📦 安装
 
@@ -40,8 +40,38 @@ uv venv --python 3.11
 source .venv/bin/activate  # macOS/Linux
 # .venv\Scripts\activate   # Windows
 
-# 安装依赖
+# 安装依赖（最小化）
 uv pip install -e .
+
+# 或安装包含可选功能
+uv pip install -e ".[langfuse,telegram,console]"
+```
+
+### 可选依赖
+
+只安装你需要的功能：
+
+| 功能组 | 安装命令 | 描述 |
+|---------------|-----------------|-------------|
+| **完整版** | `uv pip install -e ".[full]"` | 包含所有功能 |
+| **Langfuse** | `uv pip install -e ".[langfuse]"` | LLM 可观测性和追踪 |
+| **FUSE** | `uv pip install -e ".[fuse]"` | OpenViking 文件系统挂载 |
+| **沙箱** | `uv pip install -e ".[sandbox]"` | 代码执行沙箱 |
+| **OpenCode** | `uv pip install -e ".[opencode]"` | OpenCode AI 集成 |
+
+#### 聊天渠道
+
+| 渠道 | 安装命令 |
+|---------|-----------------|
+| **Telegram** | `uv pip install -e ".[telegram]"` |
+| **飞书/Lark** | `uv pip install -e ".[feishu]"` |
+| **钉钉** | `uv pip install -e ".[dingtalk]"` |
+| **Slack** | `uv pip install -e ".[slack]"` |
+| **QQ** | `uv pip install -e ".[qq]"` |
+
+可以组合多个功能：
+```bash
+uv pip install -e ".[langfuse,telegram,console]"
 ```
 
 ## 🚀 快速开始
@@ -57,7 +87,8 @@ vikingbot gateway
 ```
 
 这将自动：
-- 在 `~/.vikingbot/config.json` 创建默认配置
+- 在 `~/.openviking/ov.conf` 创建默认配置
+- 在 openviking的工作空间下创建bot启动文件。默认路径为 `~/.openviking/data/bot/`
 - 在 http://localhost:18791 启动控制台 Web UI
 
 **2. 通过控制台配置**
@@ -70,7 +101,17 @@ vikingbot gateway
 **3. 聊天**
 
 ```bash
-vikingbot agent -m "What is 2+2?"
+# 直接发送单条消息
+vikingbot chat -m "What is 2+2?"
+
+# 进入交互式聊天模式（支持多轮对话）
+vikingbot chat
+
+# 显示纯文本回复（不渲染 Markdown）
+vikingbot chat --no-markdown
+
+# 聊天时显示运行时日志（便于调试）
+vikingbot chat --logs
 ```
 
 就这么简单！您只需 2 分钟就能拥有一个可用的 AI 助手。
@@ -78,18 +119,6 @@ vikingbot agent -m "What is 2+2?"
 ## 🐳 Docker 部署
 
 您也可以使用 Docker 部署 vikingbot，以便更轻松地设置和隔离。
-
-## ☁️ 火山引擎 VKE 部署
-
-如果您想在火山引擎容器服务（VKE）上部署 vikingbot，请查看详细的部署文档：
-
-👉 [VKE 部署指南](deploy/vke/README.md)
-
-该指南包含：
-- 完整的前置准备步骤
-- 火山引擎账号、VKE 集群、镜像仓库、TOS 存储桶的创建方法
-- 一键部署脚本使用说明
-- 配置详解和故障排查
 
 ### 前置要求
 
@@ -108,14 +137,14 @@ docker --version
 
 ```bash
 # 1. 创建必要目录
-mkdir -p ~/.vikingbot/
+mkdir -p ~/.openviking/
 
 # 2. 启动容器
 docker run -d \
     --name vikingbot \
     --restart unless-stopped \
     --platform linux/amd64 \
-    -v ~/.vikingbot:/root/.vikingbot \
+    -v ~/.openviking:/root/.openviking \
     -p 18791:18791 \
     vikingbot-cn-beijing.cr.volces.com/vikingbot/vikingbot:latest \
     gateway
@@ -143,420 +172,10 @@ docker logs --tail 50 -f vikingbot
 
 更多 Docker 部署选项，请查看 [deploy/docker/README.md](deploy/docker/README.md)。
 
-## 💬 聊天应用
 
 通过 Telegram、Discord、WhatsApp、飞书、Mochat、钉钉、Slack、邮件或 QQ 与您的 vikingbot 对话 —— 随时随地。
 
-| 渠道 | 设置难度 |
-|---------|-------|
-| **Telegram** | 简单（只需一个令牌） |
-| **Discord** | 简单（机器人令牌 + 权限） |
-| **WhatsApp** | 中等（扫描二维码） |
-| **飞书** | 中等（应用凭证） |
-| **Mochat** | 中等（claw 令牌 + websocket） |
-| **钉钉** | 中等（应用凭证） |
-| **Slack** | 中等（机器人 + 应用令牌） |
-| **邮件** | 中等（IMAP/SMTP 凭证） |
-| **QQ** | 简单（应用凭证） |
-
-<details>
-<summary><b>Telegram</b>（推荐）</summary>
-
-**1. 创建机器人**
-- 打开 Telegram，搜索 `@BotFather`
-- 发送 `/newbot`，按照提示操作
-- 复制令牌
-
-**2. 配置**
-
-```json
-{
-  "channels": [
-    {
-      "type": "telegram",
-      "enabled": true,
-      "token": "YOUR_BOT_TOKEN",
-      "allowFrom": ["YOUR_USER_ID"]
-    }
-  ]
-}
-```
-
-> 您可以在 Telegram 设置中找到您的 **用户 ID**。它显示为 `@yourUserId`。
-> 复制这个值**不带 `@` 符号**并粘贴到配置文件中。
-
-
-**3. 运行**
-
-```bash
-vikingbot gateway
-```
-
-</details>
-
-<details>
-<summary><b>Mochat (Claw IM)</b></summary>
-
-默认使用 **Socket.IO WebSocket**，并带有 HTTP 轮询回退。
-
-**1. 让 vikingbot 为您设置 Mochat**
-
-只需向 vikingbot 发送此消息（将 `xxx@xxx` 替换为您的真实邮箱）：
-
-```
-Read https://raw.githubusercontent.com/HKUDS/MoChat/refs/heads/main/skills/vikingbot/skill.md and register on MoChat. My Email account is xxx@xxx Bind me as your owner and DM me on MoChat.
-```
-
-vikingbot 将自动注册、配置 `~/.vikingbot/config.json` 并连接到 Mochat。
-
-**2. 重启网关**
-
-```bash
-vikingbot gateway
-```
-
-就这么简单 —— vikingbot 处理剩下的一切！
-
-<br>
-
-<details>
-<summary>手动配置（高级）</summary>
-
-如果您更喜欢手动配置，请将以下内容添加到 `~/.vikingbot/config.json`：
-
-> 请保密 `claw_token`。它只应在 `X-Claw-Token` 头中发送到您的 Mochat API 端点。
-
-```json
-{
-  "channels": [
-    {
-      "type": "mochat",
-      "enabled": true,
-      "base_url": "https://mochat.io",
-      "socket_url": "https://mochat.io",
-      "socket_path": "/socket.io",
-      "claw_token": "claw_xxx",
-      "agent_user_id": "6982abcdef",
-      "sessions": ["*"],
-      "panels": ["*"],
-      "reply_delay_mode": "non-mention",
-      "reply_delay_ms": 120000
-    }
-  ]
-}
-```
-
-
-</details>
-
-</details>
-
-<details>
-<summary><b>Discord</b></summary>
-
-**1. 创建机器人**
-- 访问 https://discord.com/developers/applications
-- 创建应用 → 机器人 → 添加机器人
-- 复制机器人令牌
-
-**2. 启用意图**
-- 在机器人设置中，启用 **MESSAGE CONTENT INTENT**
-- （可选）如果您计划使用基于成员数据的允许列表，启用 **SERVER MEMBERS INTENT**
-
-**3. 获取您的用户 ID**
-- Discord 设置 → 高级 → 启用 **开发者模式**
-- 右键点击您的头像 → **复制用户 ID**
-
-**4. 配置**
-
-```json
-{
-  "channels": [
-    {
-      "type": "discord",
-      "enabled": true,
-      "token": "YOUR_BOT_TOKEN",
-      "allowFrom": ["YOUR_USER_ID"]
-    }
-  ]
-}
-```
-
-**5. 邀请机器人**
-- OAuth2 → URL 生成器
-- 范围：`bot`
-- 机器人权限：`发送消息`、`读取消息历史`
-- 打开生成的邀请 URL 并将机器人添加到您的服务器
-
-**6. 运行**
-
-```bash
-vikingbot gateway
-```
-
-</details>
-
-<details>
-<summary><b>WhatsApp</b></summary>
-
-需要 **Node.js ≥18**。
-
-**1. 链接设备**
-
-```bash
-vikingbot channels login
-# 使用 WhatsApp 扫描二维码 → 设置 → 链接设备
-```
-
-**2. 配置**
-
-```json
-{
-  "channels": [
-    {
-      "type": "whatsapp",
-      "enabled": true,
-      "allowFrom": ["+1234567890"]
-    }
-  ]
-}
-```
-
-**3. 运行**（两个终端）
-
-```bash
-# 终端 1
-vikingbot channels login
-
-# 终端 2
-vikingbot gateway
-```
-
-</details>
-
-<details>
-<summary><b>飞书</b></summary>
-
-使用 **WebSocket** 长连接 —— 不需要公网 IP。
-
-**1. 创建飞书机器人**
-- 访问 [飞书开放平台](https://open.feishu.cn/app)
-- 创建新应用 → 启用 **机器人** 功能
-- **权限**：添加 `im:message`（发送消息）
-- **事件**：添加 `im.message.receive_v1`（接收消息）
-  - 选择 **长连接** 模式（需要先运行 vikingbot 来建立连接）
-- 从「凭证与基础信息」获取 **App ID** 和 **App Secret**
-- 发布应用
-
-**2. 配置**
-
-```json
-{
-  "channels": [
-    {
-      "type": "feishu",
-      "enabled": true,
-      "appId": "cli_xxx",
-      "appSecret": "xxx",
-      "encryptKey": "",
-      "verificationToken": "",
-      "allowFrom": []
-    }
-  ]
-}
-```
-
-> 长连接模式下，`encryptKey` 和 `verificationToken` 是可选的。
-> `allowFrom`：留空以允许所有用户，或添加 `["ou_xxx"]` 以限制访问。
-
-**3. 运行**
-
-```bash
-vikingbot gateway
-```
-
-> [!TIP]
-> 飞书使用 WebSocket 接收消息 —— 不需要 webhook 或公网 IP！
-
-</details>
-
-<details>
-<summary><b>QQ（QQ单聊）</b></summary>
-
-使用 **botpy SDK** 配合 WebSocket —— 不需要公网 IP。目前仅支持 **私聊**。
-
-**1. 注册并创建机器人**
-- 访问 [QQ 开放平台](https://q.qq.com) → 注册为开发者（个人或企业）
-- 创建新的机器人应用
-- 进入 **开发设置** → 复制 **AppID** 和 **AppSecret**
-
-**2. 设置沙箱测试环境**
-- 在机器人管理控制台中，找到 **沙箱配置**
-- 在 **在消息列表配置** 下，点击 **添加成员** 并添加您自己的 QQ 号
-- 添加完成后，用手机 QQ 扫描机器人的二维码 → 打开机器人资料卡 → 点击「发消息」开始聊天
-
-**3. 配置**
-
-> - `allowFrom`：留空以供公开访问，或添加用户 openid 以限制。您可以在用户向机器人发消息时在 vikingbot 日志中找到 openid。
-> - 生产环境：在机器人控制台提交审核并发布。查看 [QQ 机器人文档](https://bot.q.qq.com/wiki/) 了解完整发布流程。
-
-```json
-{
-  "channels": [
-    {
-      "type": "qq",
-      "enabled": true,
-      "appId": "YOUR_APP_ID",
-      "secret": "YOUR_APP_SECRET",
-      "allowFrom": []
-    }
-  ]
-}
-```
-
-**4. 运行**
-
-```bash
-vikingbot gateway
-```
-
-现在从 QQ 向机器人发送消息 —— 它应该会回复！
-
-</details>
-
-<details>
-<summary><b>钉钉</b></summary>
-
-使用 **流模式** —— 不需要公网 IP。
-
-**1. 创建钉钉机器人**
-- 访问 [钉钉开放平台](https://open-dev.dingtalk.com/)
-- 创建新应用 -> 添加 **机器人** 功能
-- **配置**：
-  - 打开 **流模式**
-- **权限**：添加发送消息所需的权限
-- 从「凭证」获取 **AppKey**（客户端 ID）和 **AppSecret**（客户端密钥）
-- 发布应用
-
-**2. 配置**
-
-```json
-{
-  "channels": [
-    {
-      "type": "dingtalk",
-      "enabled": true,
-      "clientId": "YOUR_APP_KEY",
-      "clientSecret": "YOUR_APP_SECRET",
-      "allowFrom": []
-    }
-  ]
-}
-```
-
-> `allowFrom`：留空以允许所有用户，或添加 `["staffId"]` 以限制访问。
-
-**3. 运行**
-
-```bash
-vikingbot gateway
-```
-
-</details>
-
-<details>
-<summary><b>Slack</b></summary>
-
-使用 **Socket 模式** —— 不需要公网 URL。
-
-**1. 创建 Slack 应用**
-- 访问 [Slack API](https://api.slack.com/apps) → **创建新应用** →「从零开始」
-- 选择名称并选择您的工作区
-
-**2. 配置应用**
-- **Socket 模式**：打开 → 生成一个具有 `connections:write` 范围的 **应用级令牌** → 复制它（`xapp-...`）
-- **OAuth 与权限**：添加机器人范围：`chat:write`、`reactions:write`、`app_mentions:read`
-- **事件订阅**：打开 → 订阅机器人事件：`message.im`、`message.channels`、`app_mention` → 保存更改
-- **应用主页**：滚动到 **显示标签页** → 启用 **消息标签页** → 勾选 **"允许用户从消息标签页发送斜杠命令和消息"**
-- **安装应用**：点击 **安装到工作区** → 授权 → 复制 **机器人令牌**（`xoxb-...`）
-
-**3. 配置 vikingbot**
-
-```json
-{
-  "channels": [
-    {
-      "type": "slack",
-      "enabled": true,
-      "botToken": "xoxb-...",
-      "appToken": "xapp-...",
-      "groupPolicy": "mention"
-    }
-  ]
-}
-```
-
-**4. 运行**
-
-```bash
-vikingbot gateway
-```
-
-直接向机器人发送私信或在频道中 @提及它 —— 它应该会回复！
-
-> [!TIP]
-> - `groupPolicy`：`"mention"`（默认 —— 仅在 @提及時回复）、`"open"`（回复所有频道消息）或 `"allowlist"`（限制到特定频道）。
-> - 私信策略默认为开放。设置 `"dm": {"enabled": false}` 以禁用私信。
-
-</details>
-
-<details>
-<summary><b>邮件</b></summary>
-
-给 vikingbot 一个自己的邮箱账户。它通过 **IMAP** 轮询收件箱并通过 **SMTP** 回复 —— 就像一个个人邮件助手。
-
-**1. 获取凭证（Gmail 示例）**
-- 为您的机器人创建一个专用的 Gmail 账户（例如 `my-vikingbot@gmail.com`）
-- 启用两步验证 → 创建 [应用密码](https://myaccount.google.com/apppasswords)
-- 将此应用密码用于 IMAP 和 SMTP
-
-**2. 配置**
-
-> - `consentGranted` 必须为 `true` 以允许邮箱访问。这是一个安全门 —— 设置为 `false` 以完全禁用。
-> - `allowFrom`：留空以接受来自任何人的邮件，或限制到特定发件人。
-> - `smtpUseTls` 和 `smtpUseSsl` 分别默认为 `true` / `false`，这对 Gmail（端口 587 + STARTTLS）是正确的。无需显式设置它们。
-> - 如果您只想读取/分析邮件而不发送自动回复，请设置 `"autoReplyEnabled": false`。
-
-```json
-{
-  "channels": [
-    {
-      "type": "email",
-      "enabled": true,
-      "consentGranted": true,
-      "imapHost": "imap.gmail.com",
-      "imapPort": 993,
-      "imapUsername": "my-vikingbot@gmail.com",
-      "imapPassword": "your-app-password",
-      "smtpHost": "smtp.gmail.com",
-      "smtpPort": 587,
-      "smtpUsername": "my-vikingbot@gmail.com",
-      "smtpPassword": "your-app-password",
-      "fromAddress": "my-vikingbot@gmail.com",
-      "allowFrom": ["your-real-email@gmail.com"]
-    }
-  ]
-}
-```
-
-
-**3. 运行**
-
-```bash
-vikingbot gateway
-```
-
-</details>
+详细配置请参考 [CHANNEL.md](bot/docs/CHANNEL.md)。
 
 ## 🌐 代理社交网络
 
@@ -571,40 +190,75 @@ vikingbot gateway
 
 ## ⚙️ 配置
 
-配置文件：`~/.vikingbot/config.json`
+配置文件：`~/.openviking/ov.conf`（可通过环境变量 `OPENVIKING_CONFIG_FILE` 自定义路径）
+
+> [!TIP]
+> Vikingbot 与 OpenViking 共享同一配置文件，配置项位于文件的 `bot` 字段下，同时会自动合并 `vlm`、`storage`、`server` 等全局配置，无需单独维护配置文件。
 
 > [!IMPORTANT]
 > 修改配置后（无论是通过控制台 UI 还是直接编辑文件），
 > 您需要重启网关服务以使更改生效。
 
-### OpenViking 配置
-
-Vikingbot 支持本地和远程两种 OpenViking 模式。
-
-#### 本地模式（默认）
-
+### Openviking Server配置
+bot将连接远程的OpenViking服务器，使用前需启动Openviking Server。 默认使用`ov.conf`中配置的OpenViking server信息
+- Openviking默认启动地址为 127.0.0.1:1933
+- 如果配置了 root_api_key，则开启多租户模式。详见 [多租户](https://github.com/volcengine/OpenViking/blob/main/examples/multi_tenant/README.md)
+- Openviking Server配置示例
 ```json
 {
-  "openviking": {
-    "mode": "local"
+  "server": {
+    
+    "host": "127.0.0.1",
+    "port": 1933,
+    "root_api_key": "test"
   }
 }
 ```
 
-数据存储在 `~/.vikingbot/ov_data/`。
-
-#### 远程模式（配合火山引擎 TOS）
+### bot配置
+全部配置在`ov.conf`中`bot`字段下，配置项自带默认值。可选手动配置项说明如下：
+- `agents`：Agent 配置
+  - max_tool_iterations：单轮对话任务最大循环次数，超过则直接返回结果
+  - memory_window：自动提交session到Openviking的对话轮次上限
+  - gen_image_model：生成图片的模型
+- gateway：Gateway 配置
+  - host：Gateway 监听地址，默认值为 `0.0.0.0`
+  - port：Gateway 监听端口，默认值为 `18790`
+- sandbox：沙箱配置
+  - mode：沙箱模式，可选值为 `shared`（所有session共享工作空间）或 `private`（私有，按Channel、session隔离工作空间）。默认值为 `shared`。
+- ov_server：OpenViking Server 配置。
+  - 不配置，默认使用`ov.conf`中配置的OpenViking server信息
+  - 若不使用本地启动的OpenViking Server，可在此配置url和对应的root user的API Key
+- channels：消息平台配置，详见 [消息平台配置](bot/docs/CHANNEL.md)
 
 ```json
 {
-  "openviking": {
-    "mode": "remote",
-    "server_url": "https://your-openviking-server.com",
-    "tos_endpoint": "https://tos-cn-beijing.volces.com",
-    "tos_region": "cn-beijing",
-    "tos_bucket": "your-bucket-name",
-    "tos_ak": "your-access-key",
-    "tos_sk": "your-secret-key"
+  "bot": {
+    "agents": {
+      "max_tool_iterations": 50,
+      "memory_window": 50,
+      "gen_image_model": "openai/doubao-seedream-4-5-251128"
+    },
+    "gateway": {
+      "host": "0.0.0.0",
+      "port": 18790
+    },
+    "sandbox": {
+      "mode": "shared"
+    },
+    "ov_server": {
+      "server_url": "http://127.0.0.1:1933",
+      "root_api_key": "test"
+    },
+    "channels": [
+      {
+        "type": "feishu",
+        "enabled": true,
+        "appId": "",
+        "appSecret": "",
+        "allowFrom": []
+      }
+    ]
   }
 }
 ```
@@ -644,18 +298,15 @@ Vikingbot 默认启用 OpenViking 钩子：
 
 ```json
 {
-  "providers": {
-    "openai": {
-      "apiKey": "sk-xxx"
-    }
-  },
-  "agents": {
-    "defaults": {
+  "bot": {
+    "agents": {
       "model": "openai/doubao-seed-2-0-pro-260215"
     }
   }
 }
 ```
+
+Provider 配置从 OpenViking 配置（`ov.conf` 的 `vlm` 部分）读取。
 
 ### 提供商
 
@@ -724,6 +375,70 @@ class ProvidersConfig(BaseModel):
 </details>
 
 
+### 可观测性（可选）
+
+**Langfuse** 集成，用于 LLM 可观测性和追踪。
+
+<details>
+<summary><b>Langfuse 配置</b></summary>
+
+**方式 1：本地部署（测试推荐）**
+
+使用 Docker 在本地部署 Langfuse：
+
+```bash
+# 进入部署脚本目录
+cd deploy/docker
+
+# 运行部署脚本
+./deploy_langfuse.sh
+```
+
+这将在 `http://localhost:3000` 启动 Langfuse，并使用预配置的凭据。
+
+**方式 2：Langfuse Cloud**
+
+1. 在 [langfuse.com](https://langfuse.com) 注册
+2. 创建新项目
+3. 从项目设置中复制 **Secret Key** 和 **Public Key**
+
+**配置**
+
+添加到 `~/.openviking/ov.conf`：
+
+```json
+{
+  "bot": {
+    "langfuse": {
+      "enabled": true,
+      "secret_key": "sk-lf-vikingbot-secret-key-2026",
+      "public_key": "pk-lf-vikingbot-public-key-2026",
+      "base_url": "http://localhost:3000"
+    }
+  }
+}
+```
+
+对于 Langfuse Cloud，使用 `https://cloud.langfuse.com` 作为 `base_url`。
+
+**安装 Langfuse 支持：**
+```bash
+uv pip install -e ".[langfuse]"
+```
+
+**重启 vikingbot：**
+```bash
+vikingbot gateway
+```
+
+**启用的功能：**
+- 每次对话自动创建 trace
+- Session 和 User 追踪
+- LLM 调用监控
+- Token 使用量追踪
+
+</details>
+
 ### 安全
 
 | 选项 | 默认值 | 描述 |
@@ -733,60 +448,146 @@ class ProvidersConfig(BaseModel):
 
 ### 沙箱
 
-vikingbot 支持沙箱执行以增强安全性。默认情况下，沙箱是禁用的。要在会话模式下使用 SRT 后端启用沙箱，请设置 `"enabled": true`。
+vikingbot 支持沙箱执行以增强安全性。
+
+**默认情况下，`ov.conf` 中不需要配置 sandbox：**
+- 默认后端：`direct`（直接在主机上运行代码）
+- 默认模式：`shared`（所有会话共享一个沙箱）
+
+只有当您想要更改这些默认值时，才需要添加 sandbox 配置。
 
 <details>
-<summary><b>沙箱配置（SRT 后端）</b></summary>
+<summary><b>沙箱配置选项</b></summary>
 
+**使用不同的后端或模式：**
 ```json
 {
-  "sandbox": {
-    "enabled": false,
-    "backend": "srt",
-    "mode": "per-session",
-    "network": {
-      "allowedDomains": [],
-      "deniedDomains": [],
-      "allowLocalBinding": false
-    },
-    "filesystem": {
-      "denyRead": [],
-      "allowWrite": [],
-      "denyWrite": []
-    },
-    "runtime": {
-      "cleanupOnExit": true,
-      "timeout": 300
-    },
-    "backends": {
-      "srt": {
-        "nodePath": "node"
+  "bot": {
+    "sandbox": {
+      "backend": "opensandbox",
+      "mode": "per-session"
+    }
+  }
+}
+```
+
+**可用后端：**
+| 后端 | 描述 |
+|---------|-------------|
+| `direct` | （默认）直接在主机上运行代码 |
+| `docker` | 使用 Docker 容器进行隔离 |
+| `opensandbox` | 使用 OpenSandbox 服务 |
+| `srt` | 使用 Anthropic 的 SRT 沙箱运行时 |
+| `aiosandbox` | 使用 AIO Sandbox 服务 |
+
+**可用模式：**
+| 模式 | 描述 |
+|------|-------------|
+| `shared` | （默认）所有会话共享一个沙箱 |
+| `per-session` | 每个会话使用独立的沙箱实例 |
+
+**后端特定配置（仅在使用该后端时需要）：**
+
+**Direct 后端：**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backends": {
+        "direct": {
+          "restrictToWorkspace": false
+        }
       }
     }
   }
 }
 ```
 
-**配置选项：**
+**OpenSandbox 后端：**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "opensandbox",
+      "backends": {
+        "opensandbox": {
+          "serverUrl": "http://localhost:18792",
+          "apiKey": "",
+          "defaultImage": "opensandbox/code-interpreter:v1.0.1"
+        }
+      }
+    }
+  }
+}
+```
 
-| 选项 | 默认值 | 描述 |
-|--------|---------|-------------|
-| `enabled` | `false` | 启用沙箱执行 |
-| `backend` | `"srt"` | 沙箱后端：`srt` 或 `docker` |
-| `mode` | `"per-session"` | 沙箱模式：`per-session`（每个会话隔离）或 `shared`（跨会话共享） |
-| `network.allowedDomains` | `[]` | 允许网络访问的域列表（空 = 允许所有） |
-| `network.deniedDomains` | `[]` | 拒绝的域列表（无论允许列表如何都被阻止） |
-| `network.allowLocalBinding` | `false` | 允许绑定到本地地址（localhost、127.0.0.1） |
-| `filesystem.denyRead` | `[]` | 拒绝读取访问的路径/文件 |
-| `filesystem.allowWrite` | `[]` | 明确允许写入访问的路径/文件 |
-| `filesystem.denyWrite` | `[]` | 拒绝写入访问的路径/文件 |
-| `runtime.cleanupOnExit` | `true` | 退出时清理沙箱资源 |
-| `runtime.timeout` | `300` | 命令执行超时（秒） |
-| `backends.srt.nodePath` | `"/usr/local/bin/node"` | Node.js 可执行文件的路径（如果 `node` 不在 PATH 中，请使用完整路径） |
+**Docker 后端：**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "docker",
+      "backends": {
+        "docker": {
+          "image": "python:3.11-slim",
+          "networkMode": "bridge"
+        }
+      }
+    }
+  }
+}
+```
+
+**SRT 后端：**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "srt",
+      "backends": {
+        "srt": {
+          "settingsPath": "~/.vikingbot/srt-settings.json",
+          "nodePath": "node",
+          "network": {
+            "allowedDomains": [],
+            "deniedDomains": [],
+            "allowLocalBinding": false
+          },
+          "filesystem": {
+            "denyRead": [],
+            "allowWrite": [],
+            "denyWrite": []
+          },
+          "runtime": {
+            "cleanupOnExit": true,
+            "timeout": 300
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**AIO Sandbox 后端：**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "aiosandbox",
+      "backends": {
+        "aiosandbox": {
+          "baseUrl": "http://localhost:18794"
+        }
+      }
+    }
+  }
+}
+```
 
 **SRT 后端设置：**
 
-SRT 后端使用 `@anthropic-ai/sandbox-runtime`。当您运行 `vikingbot onboard` 时它会自动安装。
+SRT 后端使用 `@anthropic-ai/sandbox-runtime`。
 
 **系统依赖：**
 
@@ -853,11 +654,10 @@ which nodejs
 
 | 命令 | 描述 |
 |---------|-------------|
-| `vikingbot agent -m "..."` | 与代理聊天 |
-| `vikingbot agent` | 交互式聊天模式 |
-| `vikingbot agent --no-markdown` | 显示纯文本回复 |
-| `vikingbot agent --logs` | 聊天期间显示运行时日志 |
-| `vikingbot tui` | 启动 TUI（终端用户界面） |
+| `vikingbot chat -m "..."` | 与代理聊天 |
+| `vikingbot chat` | 交互式聊天模式 |
+| `vikingbot chat --no-markdown` | 显示纯文本回复 |
+| `vikingbot chat --logs` | 聊天期间显示运行时日志 |
 | `vikingbot gateway` | 启动网关和控制台 Web UI |
 | `vikingbot status` | 显示状态 |
 | `vikingbot channels login` | 链接 WhatsApp（扫描二维码） |
@@ -879,23 +679,6 @@ which nodejs
 > 在控制台中保存配置更改后，您需要重启网关服务以使更改生效。
 
 交互模式退出：`exit`、`quit`、`/exit`、`/quit`、`:q` 或 `Ctrl+D`。
-
-<details>
-<summary><b>TUI（终端用户界面）</b></summary>
-
-启动 vikingbot TUI 以获得丰富的基于终端的聊天体验：
-
-```bash
-vikingbot tui
-```
-
-TUI 提供：
-- 支持 markdown 的富文本渲染
-- 消息历史和对话管理
-- 实时代理响应
-- 导航的键盘快捷键
-
-</details>
 
 <details>
 <summary><b>定时任务（Cron）</b></summary>

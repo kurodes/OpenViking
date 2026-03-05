@@ -14,7 +14,7 @@
 ### 前置要求
 
 - **Python**: 3.10+
-- **Go**: 1.25.1+ (从源码构建 AGFS 组件需要)
+- **Go**: 1.19+ (从源码构建 AGFS 组件需要)
 - **C++ 编译器**: GCC 9+ 或 Clang 11+ (构建核心扩展需要，必须支持 C++17)
 - **CMake**: 3.12+
 
@@ -77,7 +77,7 @@ uv pip install -e . --force-reinstall
   },
   "vlm": {
     "api_key": "your-api-key",
-    "model": "doubao-seed-1-8-251228",
+    "model": "doubao-seed-2-0-pro-260215",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
 }

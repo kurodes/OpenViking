@@ -4,9 +4,11 @@ import json
 import os
 from typing import Any
 
+from loguru import logger
 import litellm
 from litellm import acompletion
 
+from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.providers.registry import find_by_model, find_gateway
 from vikingbot.utils.helpers import cal_str_tokens
@@ -28,10 +30,12 @@ class LiteLLMProvider(LLMProvider):
         default_model: str = "anthropic/claude-opus-4-5",
         extra_headers: dict[str, str] | None = None,
         provider_name: str | None = None,
+        langfuse_client: LangfuseClient | None = None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
+        self.langfuse = langfuse_client or LangfuseClient.get_instance()
 
         # Detect gateway / local deployment.
         # provider_name (from config key) is the primary signal;
@@ -107,6 +111,7 @@ class LiteLLMProvider(LLMProvider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        session_id: str | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request via LiteLLM.
@@ -117,6 +122,7 @@ class LiteLLMProvider(LLMProvider):
             model: Model identifier (e.g., 'anthropic/claude-sonnet-4-5').
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
+            session_id: Optional session ID for tracing.
 
         Returns:
             LLMResponse with content and/or tool calls.
@@ -149,10 +155,71 @@ class LiteLLMProvider(LLMProvider):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
+        # Direct Langfuse v3 SDK usage
+        # Note: session_id is set via propagate_attributes in loop.py, not here
+        langfuse_generation = None
         try:
+            if self.langfuse.enabled and self.langfuse._client:
+                metadata = {"has_tools": tools is not None}
+                langfuse_generation = self.langfuse._client.start_generation(
+                    name="llm-chat",
+                    model=model,
+                    input=messages,
+                    metadata=metadata,
+                )
+
             response = await acompletion(**kwargs)
-            return self._parse_response(response)
+            llm_response = self._parse_response(response)
+
+            # Update and end Langfuse generation
+            if langfuse_generation:
+                output_text = llm_response.content or ""
+                if llm_response.tool_calls:
+                    output_text = (
+                        output_text
+                        or f"[Tool calls: {[tc.name for tc in llm_response.tool_calls]}]"
+                    )
+
+                # Update generation with output and usage
+                update_kwargs: dict[str, Any] = {
+                    "output": output_text,
+                    "metadata": {"finish_reason": llm_response.finish_reason},
+                }
+
+                if llm_response.usage:
+                    # Langfuse v3 SDK expects "usage_details" with "input" and "output" keys
+                    usage_details: dict[str, Any] = {
+                        "input": llm_response.usage.get("prompt_tokens", 0),
+                        "output": llm_response.usage.get("completion_tokens", 0),
+                    }
+
+                    # Add cache read tokens if available (OpenAI/Anthropic prompt caching)
+                    # Try multiple possible field names for cached tokens
+                    cache_read_tokens = (
+                        llm_response.usage.get("cache_read_input_tokens") or
+                        llm_response.usage.get("prompt_tokens_details", {}).get("cached_tokens")
+                    )
+                    if cache_read_tokens:
+                        usage_details["cache_read_input_tokens"] = cache_read_tokens
+
+                    update_kwargs["usage_details"] = usage_details
+                    # Log the usage details being sent to Langfuse
+                    # logger.info(f"[LANGFUSE] Updating generation with usage_details: {usage_details}")
+
+                langfuse_generation.update(**update_kwargs)
+                langfuse_generation.end()
+                self.langfuse.flush()
+
+            return llm_response
         except Exception as e:
+            # End Langfuse generation with error
+            if langfuse_generation:
+                langfuse_generation.update(
+                    output=f"Error: {str(e)}",
+                    metadata={"error": str(e)},
+                )
+                langfuse_generation.end()
+                self.langfuse.flush()
             # Return error as content for graceful handling
             return LLMResponse(
                 content=f"Error calling LLM: {str(e)}",
@@ -188,6 +255,20 @@ class LiteLLMProvider(LLMProvider):
                 "completion_tokens": response.usage.completion_tokens,
                 "total_tokens": response.usage.total_tokens,
             }
+
+            # Extract cached tokens from various provider formats
+            # OpenAI style: prompt_tokens_details.cached_tokens
+            if hasattr(response.usage, "prompt_tokens_details"):
+                details = response.usage.prompt_tokens_details
+                if details and hasattr(details, "cached_tokens"):
+                    cached = details.cached_tokens
+                    if cached:
+                        usage["cache_read_input_tokens"] = cached
+            # Anthropic style: cache_read_input_tokens
+            elif hasattr(response.usage, "cache_read_input_tokens"):
+                cached = response.usage.cache_read_input_tokens
+                if cached:
+                    usage["cache_read_input_tokens"] = cached
 
         reasoning_content = getattr(message, "reasoning_content", None)
 

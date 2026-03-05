@@ -2,6 +2,7 @@
 
 import json
 import os
+from loguru import logger
 import re
 import shutil
 from pathlib import Path
@@ -43,16 +44,6 @@ class SkillsLoader:
                     if skill_file.exists():
                         skills.append(
                             {"name": skill_dir.name, "path": str(skill_file), "source": "workspace"}
-                        )
-
-        # Built-in skills
-        if self.builtin_skills and self.builtin_skills.exists():
-            for skill_dir in self.builtin_skills.iterdir():
-                if skill_dir.is_dir():
-                    skill_file = skill_dir / "SKILL.md"
-                    if skill_file.exists() and not any(s["name"] == skill_dir.name for s in skills):
-                        skills.append(
-                            {"name": skill_dir.name, "path": str(skill_file), "source": "builtin"}
                         )
 
         # Filter by requirements
@@ -112,7 +103,7 @@ class SkillsLoader:
         Returns:
             XML-formatted skills summary.
         """
-        all_skills = self.list_skills(filter_unavailable=False)
+        all_skills = self.list_skills(filter_unavailable=True)
         if not all_skills:
             return ""
 

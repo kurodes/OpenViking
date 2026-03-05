@@ -19,7 +19,7 @@
 ## 前置条件
 
 - 火山引擎账号（[注册地址](https://console.volcengine.com/)）
-- 已安装 OpenViking（`pip install openviking` 或从源码安装）
+- 已安装 OpenViking（`pip install openviking --upgrade --force-reinstall` 或从源码安装）
 - Python 3.11+
 
 ---
@@ -81,7 +81,7 @@ AK/SK 同时用于 TOS 和 VikingDB 的鉴权。
 3. 记录生成的 API Key
 4. 确认以下模型已开通（在 **模型广场** 中申请）：
    - `doubao-embedding-vision-250615`（多模态 Embedding）
-   - `doubao-seed-1-8-251228`（VLM 推理）
+   - `doubao-seed-2-0-pro-260215`（VLM 推理）
 5. 将 API Key 填入配置文件的 `embedding.dense.api_key` 和 `vlm.api_key`
 
 ---
@@ -164,7 +164,7 @@ cp examples/cloud/ov.conf.example examples/cloud/ov.conf
 
 > **开发调试**：如果只是本地快速验证，可以直接运行：
 > ```bash
-> pip install openviking
+> pip install openviking --upgrade --force-reinstall
 >
 > # 方式 A：放到默认路径
 > mkdir -p ~/.openviking && cp examples/cloud/ov.conf ~/.openviking/ov.conf
@@ -181,7 +181,7 @@ cp examples/cloud/ov.conf.example examples/cloud/ov.conf
 1. 安装 OpenViking：
 
 ```bash
-pip install openviking
+pip install openviking --upgrade --force-reinstall
 ```
 
 2. 将配置文件放到固定路径：
@@ -343,7 +343,7 @@ openviking:
         provider: volcengine
         input: multimodal
     vlm:
-      model: "doubao-seed-1-8-251228"
+      model: "doubao-seed-2-0-pro-260215"
       api_key: "your-ark-api-key"
       api_base: "https://ark.cn-beijing.volces.com/api/v3"
       temperature: 0.0

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 from datetime import datetime
 
+from vikingbot.config.schema import SessionKey
+
 
 # class HookType(Enum):
 #     SYNC = "sync"
@@ -16,7 +18,8 @@ class HookContext:
     event_type: str
     session_id: Optional[str] = None
     # 沙箱唯一主键
-    sandbox_key: Optional[str] = None
+    workspace_id: Optional[str] = None
+    session_key: SessionKey = None
     metadata: Dict[str, Any] = None
     timestamp: datetime = None
 

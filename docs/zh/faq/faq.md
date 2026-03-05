@@ -64,7 +64,7 @@ viking://
 ### 如何安装 OpenViking？
 
 ```bash
-pip install openviking
+pip install openviking --upgrade --force-reinstall
 ```
 
 ### 如何配置 OpenViking？
@@ -85,7 +85,7 @@ pip install openviking
   "vlm": {
     "provider": "volcengine",
     "api_key": "your-api-key",
-    "model": "doubao-seed-1-8-251228",
+    "model": "doubao-seed-2-0-pro-260215",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   },
   "rerank": {

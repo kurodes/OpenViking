@@ -4,7 +4,7 @@
 
 ## 前置要求
 
-- 已安装 OpenViking（`pip install openviking`）
+- 已安装 OpenViking（`pip install openviking --upgrade --force-reinstall`）
 - 模型配置已就绪（参见 [快速开始](02-quickstart.md) 了解配置方法）
 
 ## 启动服务
@@ -244,7 +244,7 @@ vim ~/.openviking/ov.conf
     "api_key"    : "<your-api-key>",     // Model service API Key
     "provider"   : "<provider-type>",    // Provider type (volcengine or openai)
     "max_retries": 2,
-    "model"      : "<model-name>"        // VLM model name (e.g., doubao-seed-1-8-251228 or gpt-4-vision-preview)
+    "model"      : "<model-name>"        // VLM model name (e.g., doubao-seed-2-0-pro-260215 or gpt-4-vision-preview)
   }
 }
 ```

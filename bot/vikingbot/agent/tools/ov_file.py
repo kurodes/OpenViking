@@ -16,7 +16,7 @@ class OVFileTool(Tool, ABC):
 
     async def _get_client(self, tool_context: ToolContext):
         if self._client is None:
-            self._client = await VikingClient.create(tool_context.sandbox_key)
+            self._client = await VikingClient.create(tool_context.workspace_id)
         return self._client
 
 
@@ -375,10 +375,10 @@ class VikingSearchUserMemoryTool(OVFileTool):
             "required": ["query"],
         }
 
-    async def execute(self, tool_context: "ToolContext", query: str, **kwargs: Any) -> str:
+    async def execute(self, tool_context: ToolContext, query: str, **kwargs: Any) -> str:
         try:
             client = await self._get_client(tool_context)
-            results = await client.search_user_memory(query)
+            results = await client.search_user_memory(query, tool_context.sender_id)
 
             if not results:
                 return f"No results found for query: {query}"
@@ -396,7 +396,7 @@ class VikingMemoryCommitTool(OVFileTool):
 
     @property
     def description(self) -> str:
-        return "Commit messages to OpenViking session to persist conversation history."
+        return "When user has personal information needs to be remembered, Commit messages to OpenViking."
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -405,7 +405,7 @@ class VikingMemoryCommitTool(OVFileTool):
             "properties": {
                 "messages": {
                     "type": "array",
-                    "description": "List of messages to commit, each with role, content, and optional tools_used",
+                    "description": "List of messages to commit, each with role, content",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -426,9 +426,11 @@ class VikingMemoryCommitTool(OVFileTool):
         **kwargs: Any,
     ) -> str:
         try:
+            if not tool_context.sender_id:
+                return "Error committed, sender_id is required."
             client = await self._get_client(tool_context)
             session_id = tool_context.session_key.safe_name()
-            await client.commit(session_id, messages)
+            await client.commit(session_id, messages, tool_context.sender_id)
             return f"Successfully committed to session {session_id}"
         except Exception as e:
             logger.exception(f"Error processing message: {e}")

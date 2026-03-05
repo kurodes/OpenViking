@@ -3,9 +3,6 @@
 import asyncio
 import json
 import time
-from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum
 from pathlib import Path
 
 from loguru import logger
@@ -15,8 +12,9 @@ from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools import register_default_tools
 from vikingbot.agent.tools.registry import ToolRegistry
-from vikingbot.bus.events import InboundMessage, OutboundMessage
+from vikingbot.bus.events import InboundMessage, OutboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
+from vikingbot.config import load_config
 from vikingbot.config.schema import Config
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks import HookContext
@@ -25,25 +23,7 @@ from vikingbot.providers.base import LLMProvider
 from vikingbot.sandbox import SandboxManager
 from vikingbot.session.manager import SessionManager
 from vikingbot.utils.helpers import cal_str_tokens
-
-
-class ThinkingStepType(Enum):
-    """思考步骤类型（简化版本，避免循环依赖）"""
-
-    REASONING = "reasoning"
-    TOOL_CALL = "tool_call"
-    TOOL_RESULT = "tool_result"
-    ITERATION = "iteration"
-
-
-@dataclass
-class ThinkingStep:
-    """单个思考步骤（简化版本，避免循环依赖）"""
-
-    step_type: ThinkingStepType
-    content: str
-    timestamp: datetime = field(default_factory=datetime.now)
-    metadata: dict = field(default_factory=dict)
+from vikingbot.utils.tracing import trace
 
 
 class AgentLoop:
@@ -73,9 +53,41 @@ class AgentLoop:
         cron_service: "CronService | None" = None,
         session_manager: SessionManager | None = None,
         sandbox_manager: SandboxManager | None = None,
-        thinking_callback=None,
         config: Config = None,
+        eval: bool = False,
     ):
+        """
+        Initialize the AgentLoop with all required dependencies and configuration.
+
+        Args:
+            bus: MessageBus instance for publishing and subscribing to messages.
+            provider: LLMProvider instance for making LLM calls.
+            workspace: Path to the workspace directory for file operations.
+            model: Optional model identifier. If not provided, uses the provider's default.
+            max_iterations: Maximum number of tool execution iterations per message (default: 50).
+            memory_window: Maximum number of messages to keep in session memory (default: 50).
+            brave_api_key: Optional API key for Brave search integration.
+            exa_api_key: Optional API key for Exa search integration.
+            gen_image_model: Optional model identifier for image generation (default: openai/doubao-seedream-4-5-251128).
+            exec_config: Optional configuration for the exec tool (command execution).
+            cron_service: Optional CronService for scheduled task management.
+            session_manager: Optional SessionManager for session persistence. If not provided, a new one is created.
+            sandbox_manager: Optional SandboxManager for sandboxed operations.
+            config: Optional Config object with full configuration. Used if other parameters are not provided.
+
+        Note:
+            The AgentLoop creates its own ContextBuilder, SessionManager (if not provided),
+            ToolRegistry, and SubagentManager during initialization.
+
+        Example:
+            >>> loop = AgentLoop(
+            ...     bus=message_bus,
+            ...     provider=llm_provider,
+            ...     workspace=Path("/path/to/workspace"),
+            ...     model="gpt-4",
+            ...     max_iterations=30,
+            ... )
+        """
         from vikingbot.config.schema import ExecToolConfig
 
         self.bus = bus
@@ -96,9 +108,10 @@ class AgentLoop:
 
         self._register_builtin_hooks()
         self.sessions = session_manager or SessionManager(
-            workspace, sandbox_manager=sandbox_manager
+            self.config.bot_data_path, sandbox_manager=sandbox_manager
         )
         self.tools = ToolRegistry()
+        self._eval = eval
         self.subagents = SubagentManager(
             provider=provider,
             workspace=workspace,
@@ -109,8 +122,46 @@ class AgentLoop:
         )
 
         self._running = False
-        self.thinking_callback = thinking_callback
         self._register_default_tools()
+        self._token_usage = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+
+    async def _publish_thinking_event(
+        self, session_key: SessionKey, event_type: OutboundEventType, content: str
+    ) -> None:
+        """
+        Publish a thinking event to the message bus.
+
+        Thinking events are used to communicate the agent's internal processing
+        state to the user, such as when the agent is executing a tool or
+        processing a complex request.
+
+        Args:
+            session_key: The session key identifying the conversation.
+            event_type: The type of thinking event (e.g., THINKING, TOOL_START).
+            content: The message content to display to the user.
+
+        Note:
+            This is an internal method used by the agent loop to communicate
+            progress to users during long-running operations.
+
+        Example:
+            >>> await self._publish_thinking_event(
+            ...     session_key=SessionKey(channel="telegram", chat_id="123"),
+            ...     event_type=OutboundEventType.TOOL_START,
+            ...     content="Executing web search..."
+            ... )
+        """
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                session_key=session_key,
+                content=content,
+                event_type=event_type,
+            )
+        )
 
     def _register_builtin_hooks(self):
         """Register built-in hooks."""
@@ -158,6 +209,149 @@ class AgentLoop:
         self._running = False
         logger.info("Agent loop stopping")
 
+    async def _run_agent_loop(
+        self,
+        messages: list[dict],
+        session_key: SessionKey,
+        publish_events: bool = True,
+        sender_id: str | None = None,
+    ) -> tuple[str | None, list[dict]]:
+        """
+        Run the core agent loop: call LLM, execute tools, repeat until done.
+
+        Args:
+            messages: Initial message list
+            session_key: Session key for tool execution context
+            publish_events: Whether to publish ITERATION/REASONING/TOOL_CALL events to the bus
+
+        Returns:
+            tuple of (final_content, tools_used)
+        """
+        iteration = 0
+        final_content = None
+        tools_used: list[dict] = []
+
+        while iteration < self.max_iterations:
+            iteration += 1
+
+            if publish_events:
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        session_key=session_key,
+                        content=f"Iteration {iteration}/{self.max_iterations}",
+                        event_type=OutboundEventType.ITERATION,
+                    )
+                )
+
+            response = await self.provider.chat(
+                messages=messages,
+                tools=self.tools.get_definitions(),
+                model=self.model,
+                session_id=session_key.safe_name(),
+            )
+            if  response.usage:
+                cur_token = response.usage
+                self._token_usage["prompt_tokens"] += cur_token["prompt_tokens"]
+                self._token_usage["completion_tokens"] += cur_token["completion_tokens"]
+                self._token_usage["total_tokens"] += cur_token["total_tokens"]
+
+            if publish_events and response.reasoning_content:
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        session_key=session_key,
+                        content=response.reasoning_content,
+                        event_type=OutboundEventType.REASONING,
+                    )
+                )
+
+            if response.has_tool_calls:
+                args_list = [tc.arguments for tc in response.tool_calls]
+                tool_call_dicts = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(args),
+                        },
+                    }
+                    for tc, args in zip(response.tool_calls, args_list)
+                ]
+                messages = self.context.add_assistant_message(
+                    messages,
+                    response.content,
+                    tool_call_dicts,
+                    reasoning_content=response.reasoning_content,
+                )
+
+                for tool_call in response.tool_calls:
+                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+
+                    if publish_events:
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                session_key=session_key,
+                                content=f"{tool_call.name}({args_str})",
+                                event_type=OutboundEventType.TOOL_CALL,
+                            )
+                        )
+                    logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
+                    tool_execute_start_time = time.time()
+                    result = await self.tools.execute(
+                        tool_call.name,
+                        tool_call.arguments,
+                        session_key=session_key,
+                        sandbox_manager=self.sandbox_manager,
+                        sender_id=sender_id,
+                    )
+                    tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
+                    logger.info(f"[RESULT]: {str(result)[:600]}")
+
+                    if publish_events:
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                session_key=session_key,
+                                content=str(result),
+                                event_type=OutboundEventType.TOOL_RESULT,
+                            )
+                        )
+                    messages = self.context.add_tool_result(
+                        messages, tool_call.id, tool_call.name, result
+                    )
+
+                    tool_used_dict = {
+                        "tool_name": tool_call.name,
+                        "args": args_str,
+                        "result": result,
+                        "duration": tool_execute_duration,
+                        "execute_success": True
+                        if result and "Error executing" not in result
+                        else False,
+                        "input_token": tool_call.tokens,
+                        "output_token": cal_str_tokens(result, text_type="mixed"),
+                    }
+                    tools_used.append(tool_used_dict)
+
+                messages.append(
+                    {"role": "system", "content": "Reflect on the results and decide next steps."}
+                )
+            else:
+                final_content = response.content
+                break
+
+        if final_content is None:
+            if iteration >= self.max_iterations:
+                final_content = f"Reached {self.max_iterations} iterations without completion."
+            else:
+                final_content = "I've completed processing but have no response to give."
+
+        return final_content, tools_used
+
+    @trace(
+        name="process_message",
+        extract_session_id=lambda msg: msg.session_key.safe_name(),
+        extract_user_id=lambda msg: msg.sender_id,
+    )
     async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
         Process a single inbound message.
@@ -171,6 +365,7 @@ class AgentLoop:
         """
         # Handle system messages (subagent announces)
         # The chat_id contains the original "channel:chat_id" to route back to
+        start_time = time.time()
         if msg.session_key.type == "system":
             return await self._process_system_message(msg)
 
@@ -180,15 +375,19 @@ class AgentLoop:
         # Get or create session
         session_key = msg.session_key
         # For CLI/direct sessions, skip heartbeat by default
-        skip_heartbeat = session_key.type in ("cli", "tui")
+        skip_heartbeat = session_key.type == "cli"
         session = self.sessions.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
 
         # Handle slash commands
-        cmd = msg.content.strip().lower()
+        is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
+        if is_group_chat:
+            cmd = msg.content.replace(f"@{msg.sender_id}", "").strip().lower()
+        else:
+            cmd = msg.content.strip().lower()
         if cmd == "/new":
             await self._consolidate_memory(session, archive_all=True)
             session.clear()
-            self.sessions.save(session)
+            await self.sessions.save(session)
             return OutboundMessage(
                 session_key=msg.session_key, content="🐈 New session started. Memory consolidated."
             )
@@ -208,8 +407,9 @@ class AgentLoop:
             message_workspace = self.workspace
 
         from vikingbot.agent.context import ContextBuilder
-
-        message_context = ContextBuilder(message_workspace, sandbox_manager=self.sandbox_manager)
+        message_context = ContextBuilder(
+            message_workspace, sandbox_manager=self.sandbox_manager, sender_id=msg.sender_id, is_group_chat=is_group_chat, eval=self._eval
+        )
 
         # Build initial messages (use get_history for LLM-formatted messages)
         messages = await message_context.build_messages(
@@ -219,144 +419,32 @@ class AgentLoop:
             session_key=msg.session_key,
         )
 
-        # Agent loop
-        iteration = 0
-        final_content = None
-        tools_used: list[dict] = []
-
-        while iteration < self.max_iterations:
-            iteration += 1
-
-            # 回调：迭代开始
-            if self.thinking_callback:
-                self.thinking_callback(
-                    ThinkingStep(
-                        step_type=ThinkingStepType.ITERATION,
-                        content=f"Iteration {iteration}/{self.max_iterations}",
-                        metadata={"iteration": iteration},
-                    )
-                )
-
-            # Call LLM
-            response = await self.provider.chat(
-                messages=messages, tools=self.tools.get_definitions(), model=self.model
-            )
-
-            # 回调：推理内容
-            if response.reasoning_content and self.thinking_callback:
-                self.thinking_callback(
-                    ThinkingStep(
-                        step_type=ThinkingStepType.REASONING,
-                        content=response.reasoning_content,
-                        metadata={},
-                    )
-                )
-
-            # Handle tool calls
-            if response.has_tool_calls:
-                args_list = [tc.arguments for tc in response.tool_calls]
-                tool_call_dicts = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": json.dumps(args),  # Use truncated args
-                        },
-                    }
-                    for tc, args in zip(response.tool_calls, args_list)
-                ]
-                messages = self.context.add_assistant_message(
-                    messages,
-                    response.content,
-                    tool_call_dicts,
-                    reasoning_content=response.reasoning_content,
-                )
-
-                # Execute tools
-                for tool_call in response.tool_calls:
-                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-
-                    # 回调：工具调用
-                    if self.thinking_callback:
-                        self.thinking_callback(
-                            ThinkingStep(
-                                step_type=ThinkingStepType.TOOL_CALL,
-                                content=f"{tool_call.name}({args_str})",
-                                metadata={"tool": tool_call.name, "args": tool_call.arguments},
-                            )
-                        )
-
-                    logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
-                    tool_execute_start_time = time.time()
-                    result = await self.tools.execute(
-                        tool_call.name,
-                        tool_call.arguments,
-                        session_key=session_key,
-                        sandbox_manager=self.sandbox_manager,
-                    )
-                    tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
-                    logger.info(f"[RESULT]: {str(result)[:600]}")
-
-                    # 回调：工具结果
-                    if self.thinking_callback:
-                        result_str = str(result)
-                        if len(result_str) > 500:
-                            result_str = result_str[:500] + "..."
-                        self.thinking_callback(
-                            ThinkingStep(
-                                step_type=ThinkingStepType.TOOL_RESULT,
-                                content=result_str,
-                                metadata={"tool": tool_call.name},
-                            )
-                        )
-
-                    messages = self.context.add_tool_result(
-                        messages, tool_call.id, tool_call.name, result
-                    )
-
-                    tool_used_dict = {
-                        "tool_name": tool_call.name,
-                        "args": args_str,
-                        "result": result,
-                        "duration": tool_execute_duration,
-                        "execute_success": True
-                        if result and "Error executing" not in result
-                        else False,
-                        "input_token": tool_call.tokens,
-                        "output_token": cal_str_tokens(result, text_type="mixed"),
-                    }
-                    tools_used.append(tool_used_dict)
-                # Interleaved CoT: reflect before next action
-                messages.append(
-                    {"role": "user", "content": "Reflect on the results and decide next steps."}
-                )
-            else:
-                # No tool calls, we're done
-                final_content = response.content
-                break
-
-        if final_content is None:
-            if iteration >= self.max_iterations:
-                final_content = f"Reached {self.max_iterations} iterations without completion."
-            else:
-                final_content = "I've completed processing but have no response to give."
+        # Run agent loop
+        final_content, tools_used = await self._run_agent_loop(
+            messages=messages,
+            session_key=session_key,
+            publish_events=True,
+            sender_id=msg.sender_id,
+        )
 
         # Log response preview
-        preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
+        preview = final_content[:300] + "..." if len(final_content) > 300 else final_content
         logger.info(f"Response to {msg.session_key}: {preview}")
 
         # Save to session (include tool names so consolidation sees what happened)
-        session.add_message("user", msg.content)
+        session.add_message("user", msg.content, sender_id=msg.sender_id)
         session.add_message(
             "assistant", final_content, tools_used=tools_used if tools_used else None
         )
-        self.sessions.save(session)
+        await self.sessions.save(session)
 
+        time_cost = round(time.time() - start_time, 2)
         return OutboundMessage(
             session_key=msg.session_key,
             content=final_content,
-            metadata=msg.metadata
+            metadata=msg.metadata,
+            token_usage=self._token_usage,
+            time_cost=time_cost
             or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
         )
 
@@ -376,60 +464,22 @@ class AgentLoop:
             history=session.get_history(), current_message=msg.content, session_key=msg.session_key
         )
 
-        # Agent loop (limited for announce handling)
-        iteration = 0
-        final_content = None
-
-        while iteration < self.max_iterations:
-            iteration += 1
-
-            response = await self.provider.chat(
-                messages=messages, tools=self.tools.get_definitions(), model=self.model
-            )
-
-            if response.has_tool_calls:
-                tool_call_dicts = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
-                    }
-                    for tc in response.tool_calls
-                ]
-                messages = self.context.add_assistant_message(
-                    messages,
-                    response.content,
-                    tool_call_dicts,
-                    reasoning_content=response.reasoning_content,
-                )
-
-                for tool_call in response.tool_calls:
-                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                    logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
-                    result = await self.tools.execute(
-                        tool_call.name,
-                        tool_call.arguments,
-                        session_key=msg.session_key,
-                        sandbox_manager=self.sandbox_manager,
-                    )
-                    messages = self.context.add_tool_result(
-                        messages, tool_call.id, tool_call.name, result
-                    )
-                # Interleaved CoT: reflect before next action
-                messages.append(
-                    {"role": "user", "content": "Reflect on the results and decide next steps."}
-                )
-            else:
-                final_content = response.content
-                break
+        # Run agent loop (no events published)
+        final_content, tools_used = await self._run_agent_loop(
+            messages=messages,
+            session_key=msg.session_key,
+            publish_events=False,
+        )
 
         if final_content is None:
             final_content = "Background task completed."
 
         # Save to session (mark as system message in history)
         session.add_message("user", f"[System: {msg.sender_id}] {msg.content}")
-        session.add_message("assistant", final_content)
-        self.sessions.save(session)
+        session.add_message(
+            "assistant", final_content, tools_used=tools_used if tools_used else None
+        )
+        await self.sessions.save(session)
 
         return OutboundMessage(session_key=msg.session_key, content=final_content)
 
@@ -443,7 +493,8 @@ class AgentLoop:
             context=HookContext(
                 event_type="message.compact",
                 session_id=session.key.safe_name(),
-                sandbox_key=self.sandbox_manager.to_sandbox_key(session.key),
+                workspace_id=self.sandbox_manager.to_workspace_id(session.key),
+                session_key=session.key,
             ),
             session=session,
         )
@@ -509,6 +560,7 @@ Respond with ONLY valid JSON, no markdown fences."""
                     {"role": "user", "content": prompt},
                 ],
                 model=self.model,
+                session_id=session.key.safe_name(),
             )
             text = (response.content or "").strip()
             if text.startswith("```"):
@@ -518,11 +570,11 @@ Respond with ONLY valid JSON, no markdown fences."""
             if entry := result.get("history_entry"):
                 memory.append_history(entry)
             if update := result.get("memory_update"):
-                if update != current_memory:
+                if load_config().use_local_memory and update != current_memory:
                     memory.write_long_term(update)
 
             session.messages = session.messages[-keep_count:] if keep_count else []
-            self.sessions.save(session)
+            await self.sessions.save(session)
             logger.info(
                 f"Memory consolidation done, session trimmed to {len(session.messages)} messages"
             )

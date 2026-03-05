@@ -60,7 +60,7 @@ class QQChannel(BaseChannel):
     async def start(self) -> None:
         """Start the QQ bot."""
         if not QQ_AVAILABLE:
-            logger.exception("QQ SDK not installed. Run: pip install qq-botpy")
+            logger.exception("QQ SDK not installed. Install with: uv pip install 'vikingbot[qq]' (or uv pip install -e \".[qq]\" for local dev)")
             return
 
         if not self.config.app_id or not self.config.secret:
@@ -98,6 +98,10 @@ class QQChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through QQ."""
+        # Only send normal response messages, skip thinking/tool_call/etc.
+        if not msg.is_normal_message:
+            return
+
         if not self._client:
             logger.warning("QQ client not initialized")
             return

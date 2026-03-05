@@ -112,7 +112,7 @@ class DingTalkChannel(BaseChannel):
         try:
             if not DINGTALK_AVAILABLE:
                 logger.exception(
-                    "DingTalk Stream SDK not installed. Run: pip install dingtalk-stream"
+                    "DingTalk Stream SDK not installed. Install with: uv pip install 'vikingbot[dingtalk]' (or uv pip install -e \".[dingtalk]\" for local dev)"
                 )
                 return
 
@@ -189,6 +189,10 @@ class DingTalkChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through DingTalk."""
+        # Only send normal response messages, skip thinking/tool_call/etc.
+        if not msg.is_normal_message:
+            return
+
         token = await self._get_access_token()
         if not token:
             return

@@ -13,7 +13,9 @@ to the MarkdownParser after conversion.
 """
 
 import logging
+import re
 import time
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -188,76 +190,6 @@ class PDFParser(BaseParser):
         else:
             raise ValueError(f"Unknown strategy: {self.config.strategy}")
 
-    def _extract_bookmarks(self, pdf) -> List[Dict[str, Any]]:
-        """
-        Extract PDF bookmarks/outlines and map them to page numbers.
-
-        Uses pdfplumber's underlying pdfminer to access the PDF document
-        outline (table of contents). Each bookmark entry is mapped to a
-        page number by resolving its destination object.
-
-        Args:
-            pdf: An open pdfplumber PDF object
-
-        Returns:
-            List of dicts with keys: title, level, page_num (1-based).
-            Empty list if no bookmarks are found or extraction fails.
-        """
-        bookmarks: List[Dict[str, Any]] = []
-
-        try:
-            # Access pdfminer's document object through pdfplumber
-            doc = pdf.doc
-            if not hasattr(doc, "get_outlines"):
-                return []
-
-            # Build a mapping from pdfminer page objects to page numbers
-            # pdfplumber pages are 0-indexed internally
-            objid_to_pagenum: Dict[int, int] = {}
-            for i, page in enumerate(pdf.pages):
-                if hasattr(page, "page_obj") and hasattr(page.page_obj, "objid"):
-                    objid_to_pagenum[page.page_obj.objid] = i + 1  # 1-based
-
-            for level, title, dest, _a, _se in doc.get_outlines():
-                if not title or not title.strip():
-                    continue
-
-                page_num = None
-
-                # Resolve destination to page number
-                # dest can be various types depending on the PDF structure
-                if dest:
-                    try:
-                        # dest is typically a list where first element is a page reference
-                        if isinstance(dest, (list, tuple)) and len(dest) > 0:
-                            page_ref = dest[0]
-                            if hasattr(page_ref, "objid"):
-                                page_num = objid_to_pagenum.get(page_ref.objid)
-                            elif hasattr(page_ref, "resolve"):
-                                resolved = page_ref.resolve()
-                                if hasattr(resolved, "objid"):
-                                    page_num = objid_to_pagenum.get(resolved.objid)
-                    except Exception:
-                        pass  # Best-effort resolution
-
-                # Cap heading level to 1-6 for markdown compatibility
-                md_level = min(max(level, 1), 6)
-
-                bookmarks.append(
-                    {
-                        "title": title.strip(),
-                        "level": md_level,
-                        "page_num": page_num,  # May be None if resolution failed
-                    }
-                )
-
-            logger.info(f"Extracted {len(bookmarks)} bookmarks from PDF outline")
-
-        except Exception as e:
-            logger.debug(f"Bookmark extraction failed (PDF may have no outlines): {e}")
-
-        return bookmarks
-
     async def _convert_local(
         self, pdf_path: Path, storage=None, resource_name: Optional[str] = None
     ) -> tuple[str, Dict[str, Any]]:
@@ -299,31 +231,45 @@ class PDFParser(BaseParser):
             "pages_processed": 0,
             "images_extracted": 0,
             "tables_extracted": 0,
-            "bookmarks_extracted": 0,
+            "bookmarks_found": 0,
+            "heading_source": "none",
         }
 
         try:
             with pdfplumber.open(str(pdf_path)) as pdf:
                 meta["total_pages"] = len(pdf.pages)
 
-                # Step 1: Extract bookmarks and group by page number
-                bookmarks = self._extract_bookmarks(pdf)
-                meta["bookmarks_extracted"] = len(bookmarks)
+                # Extract structure (bookmarks → font fallback)
+                detection_mode = self.config.heading_detection
+                bookmarks = []
+                heading_source = "none"
 
-                # Build a lookup: page_num -> list of bookmarks to inject before that page's content
-                bookmarks_by_page: Dict[int, List[Dict[str, Any]]] = {}
+                if detection_mode in ("bookmarks", "auto"):
+                    bookmarks = self._extract_bookmarks(pdf)
+                    if bookmarks:
+                        heading_source = "bookmarks"
+
+                if not bookmarks and detection_mode in ("font", "auto"):
+                    bookmarks = self._detect_headings_by_font(pdf)
+                    if bookmarks:
+                        heading_source = "font_analysis"
+
+                meta["bookmarks_found"] = len(bookmarks)
+                meta["heading_source"] = heading_source
+                logger.info(f"Heading detection: {heading_source}, found {len(bookmarks)} headings")
+
+                # Group bookmarks by page_num
+                bookmarks_by_page = defaultdict(list)
                 for bm in bookmarks:
-                    pg = bm.get("page_num")
-                    if pg is not None:
-                        bookmarks_by_page.setdefault(pg, []).append(bm)
+                    if bm["page_num"]:
+                        bookmarks_by_page[bm["page_num"]].append(bm)
 
-                # Step 2: Extract content page by page, injecting bookmark headings
                 for page_num, page in enumerate(pdf.pages, 1):
-                    # Inject bookmark headings for this page (before page content)
-                    if page_num in bookmarks_by_page:
-                        for bm in bookmarks_by_page[page_num]:
-                            heading_prefix = "#" * bm["level"]
-                            parts.append(f"{heading_prefix} {bm['title']}")
+                    # Inject headings before page text
+                    page_bookmarks = bookmarks_by_page.get(page_num, [])
+                    for bm in page_bookmarks:
+                        heading_prefix = "#" * bm["level"]
+                        parts.append(f"\n{heading_prefix} {bm['title']}\n")
 
                     # Extract text
                     text = page.extract_text()
@@ -380,7 +326,7 @@ class PDFParser(BaseParser):
             markdown_content = "\n\n".join(parts)
             logger.info(
                 f"Local conversion: {meta['pages_processed']}/{meta['total_pages']} pages, "
-                f"{meta['bookmarks_extracted']} bookmarks, "
+                f"{meta['bookmarks_found']} bookmarks ({meta['heading_source']}), "
                 f"{meta['images_extracted']} images, {meta['tables_extracted']} tables → "
                 f"{len(markdown_content)} chars"
             )
@@ -390,6 +336,175 @@ class PDFParser(BaseParser):
         except Exception as e:
             logger.error(f"pdfplumber conversion failed: {e}")
             raise
+
+    def _extract_bookmarks(self, pdf) -> List[Dict[str, Any]]:
+        """Extract bookmark structure from PDF outlines.
+
+        Returns: [{level: int, title: str, page_num: int(1-based)}]
+        """
+        try:
+            if not hasattr(pdf, "doc") or not hasattr(pdf.doc, "get_outlines"):
+                return []
+
+            outlines = pdf.doc.get_outlines()
+            if not outlines:
+                return []
+
+            # Build objid → page_number mapping
+            objid_to_num = {
+                page.page_obj.objid: i + 1
+                for i, page in enumerate(pdf.pages)
+                if hasattr(page, "page_obj") and hasattr(page.page_obj, "objid")
+            }
+
+            bookmarks = []
+            for level, title, dest, _action, _se in outlines:
+                if not title or not title.strip():
+                    continue
+
+                page_num = None
+                try:
+                    if dest and len(dest) > 0:
+                        page_ref = dest[0]
+                        if hasattr(page_ref, "objid"):
+                            page_num = objid_to_num.get(page_ref.objid)
+                        elif hasattr(page_ref, "resolve"):
+                            resolved = page_ref.resolve()
+                            if hasattr(resolved, "objid"):
+                                page_num = objid_to_num.get(resolved.objid)
+                except Exception:
+                    pass
+
+                bookmarks.append(
+                    {
+                        "level": min(max(level, 1), 6),
+                        "title": title.strip(),
+                        "page_num": page_num,
+                    }
+                )
+
+            return bookmarks
+
+        except Exception as e:
+            logger.warning(f"Failed to extract bookmarks: {e}")
+            return []
+
+    def _detect_headings_by_font(self, pdf) -> List[Dict[str, Any]]:
+        """Detect headings by font size analysis.
+
+        Returns: [{level: int, title: str, page_num: int(1-based)}]
+        """
+        try:
+            # Step 1: Sample font size distribution (every 5th page)
+            size_counter: Counter = Counter()
+            sample_pages = pdf.pages[::5]
+            for page in sample_pages:
+                for char in page.chars:
+                    if char["text"].strip():
+                        rounded = round(char["size"] * 2) / 2
+                        size_counter[rounded] += 1
+
+            if not size_counter:
+                return []
+
+            # Step 2: Determine body font size and heading font sizes
+            body_size = size_counter.most_common(1)[0][0]
+            min_delta = self.config.font_heading_min_delta
+
+            heading_sizes = sorted(
+                [
+                    s
+                    for s, count in size_counter.items()
+                    if s >= body_size + min_delta and count < size_counter[body_size] * 0.3
+                ],
+                reverse=True,
+            )
+
+            max_levels = self.config.max_heading_levels
+            heading_sizes = heading_sizes[:max_levels]
+
+            if not heading_sizes:
+                logger.debug(f"Font analysis: body_size={body_size}pt, no heading sizes found")
+                return []
+
+            size_to_level = {s: i + 1 for i, s in enumerate(heading_sizes)}
+            logger.debug(
+                f"Font analysis: body_size={body_size}pt, "
+                f"heading_sizes={heading_sizes}, size_to_level={size_to_level}"
+            )
+
+            # Step 3: Extract heading text page by page
+            headings: List[Dict[str, Any]] = []
+
+            def flush_line(chars_to_flush: list, page_num: int) -> None:
+                if not chars_to_flush:
+                    return
+                title = "".join(c["text"] for c in chars_to_flush).strip()
+                size = round(chars_to_flush[0]["size"] * 2) / 2
+
+                if len(title) < 2:
+                    return
+                if len(title) > 100:
+                    return
+                if title.isdigit():
+                    return
+                if re.match(r"^[\d\s.·…]+$", title):
+                    return
+
+                headings.append(
+                    {
+                        "level": size_to_level[size],
+                        "title": title,
+                        "page_num": page_num,
+                    }
+                )
+
+            for page in pdf.pages:
+                page_num = page.page_number + 1
+                chars = sorted(page.chars, key=lambda c: (c["top"], c["x0"]))
+
+                current_line_chars: list = []
+                current_top = None
+
+                for char in chars:
+                    # Performance: headings won't appear in bottom 70% of page
+                    if char["top"] > page.height * 0.3:
+                        flush_line(current_line_chars, page_num)
+                        current_line_chars = []
+                        break
+
+                    rounded_size = round(char["size"] * 2) / 2
+                    if rounded_size not in size_to_level:
+                        flush_line(current_line_chars, page_num)
+                        current_line_chars = []
+                        current_top = None
+                        continue
+
+                    # Same line check (top offset < 2pt)
+                    if current_top is not None and abs(char["top"] - current_top) > 2:
+                        flush_line(current_line_chars, page_num)
+                        current_line_chars = []
+
+                    current_line_chars.append(char)
+                    current_top = char["top"]
+
+                flush_line(current_line_chars, page_num)
+
+            # Step 4: Deduplicate - filter headers appearing on >30% of pages
+            title_page_count: Counter = Counter(h["title"] for h in headings)
+            total_pages = len(pdf.pages)
+            header_titles = {t for t, c in title_page_count.items() if c > total_pages * 0.3}
+            headings = [h for h in headings if h["title"] not in header_titles]
+
+            logger.debug(
+                f"Font heading detection: {len(headings)} headings found "
+                f"(filtered {len(header_titles)} header titles)"
+            )
+            return headings
+
+        except Exception as e:
+            logger.warning(f"Failed to detect headings by font: {e}")
+            return []
 
     def _extract_image_from_page(self, page, img_info: dict) -> Optional[bytes]:
         """

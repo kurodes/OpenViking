@@ -31,9 +31,13 @@ class Session:
     updated_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def add_message(self, role: str, content: str, **kwargs: Any) -> None:
+    def add_message(
+        self, role: str, content: str, sender_id: str | None = None, **kwargs: Any
+    ) -> None:
         """Add a message to the session."""
         msg = {"role": role, "content": content, "timestamp": datetime.now().isoformat(), **kwargs}
+        if sender_id is not None:
+            msg["sender_id"] = sender_id
         self.messages.append(msg)
         self.updated_at = datetime.now()
 
@@ -63,18 +67,39 @@ class Session:
 
 class SessionManager:
     """
-    Manages conversation sessions.
+    Manages conversation sessions with persistence and caching.
 
-    Sessions are stored as JSONL files in sessions directory.
+    SessionManager handles the lifecycle of conversation sessions, including
+    creation, retrieval, caching, and persistent storage. Sessions are stored
+    as JSONL files in a designated directory for durability.
+
+    The manager maintains an in-memory cache of active sessions to improve
+    performance and reduce disk I/O. Sessions are automatically persisted when
+    modified.
+
+    Attributes:
+        bot_data_path: Path to the bot's data directory.
+        workspace: Path to the workspace directory within bot_data.
+        sessions_dir: Path where session JSONL files are stored.
+        _cache: In-memory cache mapping SessionKey to Session objects.
+        sandbox_manager: Optional sandbox manager for isolated operations.
+
+    Example:
+        >>> manager = SessionManager(Path("/path/to/bot/data"))
+        >>> session_key = SessionKey(channel="telegram", chat_id="12345")
+        >>> session = manager.get_or_create(session_key)
+        >>> session.add_message("user", "Hello!")
+        >>> await manager.save(session)
     """
 
     def __init__(
         self,
-        workspace: Path,
+        bot_data_path: Path,
         sandbox_manager: "SandboxManager | None" = None,
     ):
-        self.workspace = workspace
-        self.sessions_dir = ensure_dir(Path.home() / ".vikingbot" / "sessions")
+        self.bot_data_path = bot_data_path
+        self.workspace = bot_data_path / "workspace"
+        self.sessions_dir = ensure_dir(bot_data_path / "sessions")
         self._cache: dict[SessionKey, Session] = {}
         self.sandbox_manager = sandbox_manager
 
@@ -111,7 +136,7 @@ class SessionManager:
             if self.sandbox_manager.config.mode == "shared":
                 workspace_path = self.sandbox_manager.workspace / "shared"
             else:
-                workspace_path = self.sandbox_manager.workspace / key.replace(":", "_")
+                workspace_path = self.sandbox_manager.workspace / key.safe_name()
             ensure_session_workspace(workspace_path)
 
         # Initialize sandbox
@@ -175,7 +200,7 @@ class SessionManager:
             logger.warning(f"Failed to load session {session_key}: {e}")
             return None
 
-    def save(self, session: Session) -> None:
+    async def save(self, session: Session) -> None:
         """Save a session to disk."""
         path = self._get_session_path(session.key)
 
