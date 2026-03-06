@@ -26,6 +26,7 @@ from openviking_cli.exceptions import (
 )
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.uri import VikingURI
+from openviking.storage.viking_fs import AGFSHTTPError
 
 logger = get_logger(__name__)
 
@@ -110,43 +111,44 @@ class ResourceService:
                     f"add_resource only supports resources scope, use dedicated interface to add {parsed.scope} content"
                 )
             
-            if self._incremental_updater:
-                try:
-                    viking_fs = get_viking_fs()
-                    resource_path = parsed.local_path
-                    
-                    if viking_fs._agfs.exists(resource_path):
-                        logger.info(
-                            f"Resource exists, performing incremental update: {target}"
-                        )
-                        
-                        update_result = await self._incremental_updater.update_resource(
-                            resource_uri=target,
-                            source_path=path,
-                            ctx=ctx,
-                            wait=wait,
-                        )
-                        
-                        result = {
-                            "status": "success" if update_result.success else "error",
-                            "root_uri": target,
-                            "is_incremental": update_result.is_incremental,
-                            "diff_stats": update_result.diff_stats,
-                            "reuse_stats": update_result.reuse_stats,
-                            "duration_ms": update_result.duration_ms,
-                        }
-                        
-                        if not update_result.success:
-                            result["error"] = update_result.error_message
-                            result["error_stage"] = update_result.error_stage
-                        
-                        return result
-                        
-                except ResourceLockConflictError as e:
-                    logger.warning(f"Resource lock conflict: {e}")
-                    raise ConflictError(
-                        f"Resource '{target}' is currently being updated by another operation"
-                    ) from e
+           
+            try:
+                viking_fs = get_viking_fs()
+                await viking_fs.stat(parsed.full_path, ctx=ctx)
+                # 如果执行到这里，说明资源存在
+                logger.info(
+                    f"Resource exists, performing incremental update: {target}"
+                )
+                
+                update_result = await self._incremental_updater.update_resource(
+                    resource_uri=target,
+                    source_path=path,
+                    ctx=ctx,
+                    wait=wait,
+                )
+                
+                result = {
+                    "status": "success" if update_result.success else "error",
+                    "root_uri": target,
+                    "is_incremental": update_result.is_incremental,
+                    "diff_stats": update_result.diff_stats,
+                    "reuse_stats": update_result.reuse_stats,
+                    "duration_ms": update_result.duration_ms,
+                }
+                
+                if not update_result.success:
+                    result["error"] = update_result.error_message
+                    result["error_stage"] = update_result.error_stage
+                
+                return result
+            except AGFSHTTPError as e:
+                if e.status_code == 404:
+                    logger.info(f"Resource not found, performing full update: {target}")
+            except ResourceLockConflictError as e:
+                logger.warning(f"Resource lock conflict: {e}")
+                raise ConflictError(
+                    f"Resource '{target}' is currently being updated by another operation"
+                ) from e
 
         result = await self._resource_processor.process_resource(
             path=path,

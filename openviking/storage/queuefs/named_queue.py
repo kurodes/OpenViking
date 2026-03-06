@@ -285,7 +285,7 @@ class NamedQueue:
             else:
                 return 0
         except Exception as e:
-            logger.debug(f"[NamedQueue] Get size failed for {self.name}: {e}")
+            logger.debug(f"[NamedQueue] Get size failed for {self.name} {size_file}: {e}")
             return 0
 
     async def clear(self) -> bool:

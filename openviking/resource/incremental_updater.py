@@ -319,9 +319,15 @@ class IncrementalUpdater:
         
         try:
             viking_uri = VikingURI(resource_uri)
+            logger.info(
+                f"Updating resource: {resource_uri}, source_path: {source_path}"
+            )
             resource_path = viking_uri.local_path
             
             is_incremental = self._agfs.exists(resource_path)
+            logger.info(
+                f"Resource exists, performing incremental update: {resource_uri}"
+            )
             result.is_incremental = is_incremental
             
             self._log_stage(

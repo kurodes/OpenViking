@@ -32,21 +32,23 @@ def get_resource_content_type(file_name: str) -> ResourceContentType:
     """Determine resource content type based on file extension."""
     file_name = file_name.lower()
     
-    text_extensions = {".txt", ".md", ".csv", ".json", ".xml", ".py", ".js", ".ts", ".java", ".cpp", ".c", ".h", ".go", ".rs"}
     image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"}
     video_extensions = {".mp4", ".avi", ".mov", ".wmv", ".flv"}
     audio_extensions = {".mp3", ".wav", ".aac", ".flac"}
+    binary_extensions = {".exe", ".dll", ".so", ".dylib", ".zip", ".tar", ".gz", ".rar", ".7z", 
+                         ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", 
+                         ".db", ".sqlite", ".bin", ".dat", ".pyc", ".pyo", ".class", ".jar"}
     
-    if any(file_name.endswith(ext) for ext in text_extensions):
-        return ResourceContentType.TEXT
-    elif any(file_name.endswith(ext) for ext in image_extensions):
+    if any(file_name.endswith(ext) for ext in image_extensions):
         return ResourceContentType.IMAGE
     elif any(file_name.endswith(ext) for ext in video_extensions):
         return ResourceContentType.VIDEO
     elif any(file_name.endswith(ext) for ext in audio_extensions):
         return ResourceContentType.AUDIO
-    
-    return ResourceContentType.UNKNOWN
+    elif any(file_name.endswith(ext) for ext in binary_extensions):
+        return ResourceContentType.UNKNOWN
+
+    return ResourceContentType.TEXT
 
 async def vectorize_directory_meta(
     uri: str,
