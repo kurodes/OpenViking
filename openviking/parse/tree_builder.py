@@ -93,7 +93,7 @@ class TreeBuilder:
         parent_uri: Optional[str] = None,
         source_path: Optional[str] = None,
         source_format: Optional[str] = None,
-        trigger_semantic: bool = False,
+        **kwargs,
     ) -> "BuildingTree":
         """
         Finalize processing by moving from temp to AGFS.
@@ -104,7 +104,10 @@ class TreeBuilder:
             trigger_semantic: Whether to automatically trigger semantic generation.
                               Default is False (handled by ResourceProcessor/Summarizer).
         """
-
+        trigger_semantic = kwargs.get("summary", False)
+        trigger_vectorization = kwargs.get("build_index", False)
+        trigger_semantic = trigger_vectorization or trigger_semantic
+        
         viking_fs = get_viking_fs()
         temp_uri = temp_dir_path
 
@@ -159,11 +162,9 @@ class TreeBuilder:
 
         final_uri = candidate_uri
         logger.info(f"[TreeBuilder] Finalizing from temp: {final_uri}")
-        is_incremental = viking_fs.exists(final_uri, ctx=ctx)
-        logger.info(f"[TreeBuilder] is Incremental update: {is_incremental}")
         if trigger_semantic:
             try:    
-                await self._enqueue_semantic_generation(temp_uri,final_uri, "resource", ctx=update_context)
+                await self._enqueue_semantic_generation(temp_uri,final_uri, "resource",trigger_vectorization=trigger_vectorization, ctx=update_context)
                 logger.info(f"[TreeBuilder] Enqueued semantic generation for: {final_uri} from {temp_uri}")
             except Exception as e:
                 logger.error(f"[TreeBuilder] Failed to enqueue semantic generation: {e}", exc_info=True)
@@ -192,26 +193,7 @@ class TreeBuilder:
 
         return tree
 
-    async def _resolve_unique_uri(
-        self, uri: str, max_attempts: int = 100, ctx: Optional[RequestContext] = None
-    ) -> str:
-        """Return a URI that does not collide with an existing resource.
-
-        If *uri* is free, return it unchanged.  Otherwise append ``_1``,
-        ``_2``, … until a free name is found (like macOS Finder / Windows
-        Explorer).
-        """
-        viking_fs = get_viking_fs()
-
-        if not await viking_fs.exists(uri, ctx=ctx):
-            return uri
-
-        for i in range(1, max_attempts + 1):
-            candidate = f"{uri}_{i}"
-            if not await viking_fs.exists(candidate, ctx=ctx):
-                return candidate
-
-        raise FileExistsError(f"Cannot resolve unique name for {uri} after {max_attempts} attempts")
+   
 
     async def _move_temp_to_dest(
         self, viking_fs, src_uri: str, dst_uri: str, ctx: RequestContext
@@ -245,14 +227,13 @@ class TreeBuilder:
                 logger.debug(f"Parent dir {parent_uri} may already exist: {e}")
 
     async def _enqueue_semantic_generation(
-        self, temp_uri: str, final_uri: str, context_type: str, ctx: RequestContext
+        self, temp_uri: str, final_uri: str, context_type: str, trigger_vectorization: bool, ctx: RequestContext
     ) -> None:
         """
         Enqueue a directory for semantic generation.
 
         Args:
-            temp_uri: Temporary directory URI
-            final_uri: Final target URI
+            uri: Directory URI to enqueue
             context_type: resource/memory/skill
         """
 
@@ -263,40 +244,13 @@ class TreeBuilder:
 
         # Sort by depth (descending) for bottom-up processing
         msg = SemanticMsg(
-            uri=temp_uri,
+            uri=uri,
             context_type=context_type,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             agent_id=ctx.user.agent_id,
             role=ctx.role.value,
-            is_incremental_update = is_incremental,
             target_uri=final_uri,
+            trigger_vectorization=trigger_vectorization,
         )
         await semantic_queue.enqueue(msg)
-
-    async def _load_content(self, uri: str, content_type: str) -> str:
-        """Helper to load content with proper type handling"""
-        import json
-
-        if content_type == "abstract":
-            result = await get_viking_fs().abstract(uri)
-        elif content_type == "overview":
-            result = await get_viking_fs().overview(uri)
-        elif content_type == "detail":
-            result = await get_viking_fs().read_file(uri)
-        else:
-            return ""
-
-        # Handle different return types
-        if isinstance(result, str):
-            return result
-        elif isinstance(result, bytes):
-            return result.decode("utf-8")
-        elif hasattr(result, "to_dict") and not isinstance(result, list):
-            # Handle FindResult by converting to dict (skip lists)
-            return str(result.to_dict())
-        elif isinstance(result, list):
-            # Handle list results
-            return json.dumps(result)
-        else:
-            return str(result)

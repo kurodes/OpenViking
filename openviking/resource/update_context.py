@@ -21,7 +21,6 @@ class UpdateContext:
     is_incremental: bool = False
     source_format: Optional[str] = None
     source_scope: Optional[str] = "resources"
-    trigger_semantic: bool = False
     document_name: Optional[str] = None  # Document name determined by parser (e.g., "org/repo" for GitHub repos)
     
     def to_dict(self) -> Dict[str, Any]:
