@@ -17,7 +17,6 @@ authors = [
     {name = "ByteDance", email = "noreply@bytedance.com"}
 ]
 license = { text = "Apache-2.0" }
-requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
