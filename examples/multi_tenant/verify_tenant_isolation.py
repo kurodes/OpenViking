@@ -483,9 +483,9 @@ def run(base_url: str, root_key: str):
             {"uri": "viking://resources/", "pattern": "ALPHA_HANDBOOK_MARKER"},
         )
         if resp.is_success:
-            alice_grep = resp.json().get("result", [])
-            has_match = bool(alice_grep) if isinstance(alice_grep, list) else bool(alice_grep)
-            check(has_match, "alice can grep Company A's marker in resources")
+            alice_grep = resp.json().get("result", {})
+            matches = alice_grep.get("matches", []) if isinstance(alice_grep, dict) else alice_grep
+            check(bool(matches), "alice can grep Company A's marker in resources")
         else:
             skip("alice grep Company A", f"HTTP {resp.status_code}")
 
@@ -495,9 +495,9 @@ def run(base_url: str, root_key: str):
             {"uri": "viking://resources/", "pattern": "ALPHA_HANDBOOK_MARKER"},
         )
         if resp.is_success:
-            charlie_grep = resp.json().get("result", [])
-            has_match = bool(charlie_grep) if isinstance(charlie_grep, list) else bool(charlie_grep)
-            check(not has_match, "charlie cannot grep Company A's marker (sees Company B only)")
+            charlie_grep = resp.json().get("result", {})
+            matches = charlie_grep.get("matches", []) if isinstance(charlie_grep, dict) else charlie_grep
+            check(not bool(matches), "charlie cannot grep Company A's marker (sees Company B only)")
         else:
             skip("charlie grep Company A marker", f"HTTP {resp.status_code}")
 
@@ -507,9 +507,9 @@ def run(base_url: str, root_key: str):
             {"uri": "viking://resources/", "pattern": "BRAVO_HANDBOOK_MARKER"},
         )
         if resp.is_success:
-            charlie_grep_b = resp.json().get("result", [])
-            has_match = bool(charlie_grep_b) if isinstance(charlie_grep_b, list) else bool(charlie_grep_b)
-            check(has_match, "charlie can grep Company B's marker in resources")
+            charlie_grep_b = resp.json().get("result", {})
+            matches = charlie_grep_b.get("matches", []) if isinstance(charlie_grep_b, dict) else charlie_grep_b
+            check(bool(matches), "charlie can grep Company B's marker in resources")
         else:
             skip("charlie grep Company B", f"HTTP {resp.status_code}")
 
@@ -519,9 +519,9 @@ def run(base_url: str, root_key: str):
             {"uri": "viking://resources/", "pattern": "BRAVO_HANDBOOK_MARKER"},
         )
         if resp.is_success:
-            alice_grep_b = resp.json().get("result", [])
-            has_match = bool(alice_grep_b) if isinstance(alice_grep_b, list) else bool(alice_grep_b)
-            check(not has_match, "alice cannot grep Company B's marker (sees Company A only)")
+            alice_grep_b = resp.json().get("result", {})
+            matches = alice_grep_b.get("matches", []) if isinstance(alice_grep_b, dict) else alice_grep_b
+            check(not bool(matches), "alice cannot grep Company B's marker (sees Company A only)")
         else:
             skip("alice grep Company B marker", f"HTTP {resp.status_code}")
     else:
