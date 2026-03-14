@@ -153,13 +153,13 @@ def run(base_url: str, root_key: str):
     check(resp.is_success, "Created Company A with admin alice")
     alice_key = resp.json()["result"]["user_key"]
 
-    # Register bob in Company A
+    # Register bob in Company A (admin alice creates the employee)
     resp = api_post(
         f"{base}/api/v1/admin/accounts/company_a/users",
-        root_h,
+        h(alice_key),
         {"user_id": "bob", "role": "user"},
     )
-    check(resp.is_success, "Registered bob in Company A")
+    check(resp.is_success, "alice registered bob in Company A")
     bob_key = resp.json()["result"]["user_key"]
 
     # Create Company B with admin charlie
@@ -171,13 +171,13 @@ def run(base_url: str, root_key: str):
     check(resp.is_success, "Created Company B with admin charlie")
     charlie_key = resp.json()["result"]["user_key"]
 
-    # Register diana in Company B
+    # Register diana in Company B (admin charlie creates the employee)
     resp = api_post(
         f"{base}/api/v1/admin/accounts/company_b/users",
-        root_h,
+        h(charlie_key),
         {"user_id": "diana", "role": "user"},
     )
-    check(resp.is_success, "Registered diana in Company B")
+    check(resp.is_success, "charlie registered diana in Company B")
     diana_key = resp.json()["result"]["user_key"]
 
     print(f"\n  Company A: alice (ADMIN), bob (USER)")
