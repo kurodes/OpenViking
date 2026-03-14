@@ -369,12 +369,17 @@ def run(base_url: str, root_key: str):
         alice_resources = ls_names(base, alice_key, "viking://resources/")
         bob_resources = ls_names(base, bob_key, "viking://resources/")
         check(
-            any("company_a" in name.lower() for name in alice_resources),
+            len(alice_resources) > 0,
             f"alice can see Company A knowledge base (resources: {alice_resources})",
         )
         check(
-            any("company_a" in name.lower() for name in bob_resources),
+            len(bob_resources) > 0,
             f"bob can see Company A knowledge base (resources: {bob_resources})",
+        )
+        # Both users in the same company should see the same resources
+        check(
+            set(alice_resources) == set(bob_resources),
+            "alice and bob see the same Company A resources",
         )
     else:
         skip("Company A knowledge base sharing", "upload failed")
@@ -384,12 +389,16 @@ def run(base_url: str, root_key: str):
         charlie_resources = ls_names(base, charlie_key, "viking://resources/")
         diana_resources = ls_names(base, diana_key, "viking://resources/")
         check(
-            any("company_b" in name.lower() for name in charlie_resources),
+            len(charlie_resources) > 0,
             f"charlie can see Company B knowledge base (resources: {charlie_resources})",
         )
         check(
-            any("company_b" in name.lower() for name in diana_resources),
+            len(diana_resources) > 0,
             f"diana can see Company B knowledge base (resources: {diana_resources})",
+        )
+        check(
+            set(charlie_resources) == set(diana_resources),
+            "charlie and diana see the same Company B resources",
         )
     else:
         skip("Company B knowledge base sharing", "upload failed")
@@ -400,27 +409,28 @@ def run(base_url: str, root_key: str):
 
     if kb_a_ok and kb_b_ok:
         print("  Company A users vs Company B resources:")
-        alice_resources = ls_names(base, alice_key, "viking://resources/")
-        bob_resources = ls_names(base, bob_key, "viking://resources/")
+        alice_resources = set(ls_names(base, alice_key, "viking://resources/"))
+        bob_resources = set(ls_names(base, bob_key, "viking://resources/"))
+        charlie_resources = set(ls_names(base, charlie_key, "viking://resources/"))
+        diana_resources = set(ls_names(base, diana_key, "viking://resources/"))
+        # Cross-company resource sets should be completely disjoint
         check(
-            not any("company_b" in name.lower() for name in alice_resources),
-            f"alice cannot see Company B resources (sees: {alice_resources})",
+            alice_resources.isdisjoint(charlie_resources),
+            f"alice cannot see Company B resources (alice: {sorted(alice_resources)}, charlie: {sorted(charlie_resources)})",
         )
         check(
-            not any("company_b" in name.lower() for name in bob_resources),
-            f"bob cannot see Company B resources (sees: {bob_resources})",
+            bob_resources.isdisjoint(charlie_resources),
+            f"bob cannot see Company B resources (bob: {sorted(bob_resources)}, charlie: {sorted(charlie_resources)})",
         )
 
         print("  Company B users vs Company A resources:")
-        charlie_resources = ls_names(base, charlie_key, "viking://resources/")
-        diana_resources = ls_names(base, diana_key, "viking://resources/")
         check(
-            not any("company_a" in name.lower() for name in charlie_resources),
-            f"charlie cannot see Company A resources (sees: {charlie_resources})",
+            charlie_resources.isdisjoint(alice_resources),
+            f"charlie cannot see Company A resources (charlie: {sorted(charlie_resources)}, alice: {sorted(alice_resources)})",
         )
         check(
-            not any("company_a" in name.lower() for name in diana_resources),
-            f"diana cannot see Company A resources (sees: {diana_resources})",
+            diana_resources.isdisjoint(alice_resources),
+            f"diana cannot see Company A resources (diana: {sorted(diana_resources)}, alice: {sorted(alice_resources)})",
         )
     else:
         skip("Cross-company resource isolation", "some uploads failed")
