@@ -1,32 +1,33 @@
 # OpenViking 多租户集成指南
 
-> 面向上层应用开发者。说明如何在"公司 → 用户"两级租户模型下，正确调用 OpenViking 的多租户 API。
+> 面向上层应用开发者。说明如何在"公司 → 部门 → 员工"三级租户模型下，正确调用 OpenViking 的多租户 API。
 
 ---
 
 ## 一、概念映射
 
-上层应用只有两层租户：**公司**和**用户**。OpenViking 的多租户模型天然对齐：
+上层应用有三层租户：**公司**、**部门**和**员工**。映射到 OpenViking：
 
 ```
-上层应用                     OpenViking
-────────                    ──────────
-公司 (Company)          →   Account
-用户 (User)             →   User
-公司共享知识库           →   viking://resources/     (Account 内所有用户可访问)
-用户私有记忆/对话        →   viking://user/{uid}/    (仅本人可访问)
-用户的某个 AI Agent     →   viking://agent/{hash}/  (仅本人+该 Agent 可访问)
+上层应用                     OpenViking              说明
+────────                    ──────────              ────
+公司 (Company)          →   ROOT                    持有 root_api_key，管理所有部门
+部门 (Department)       →   Account                 部门间完全隔离
+员工 (Employee)         →   User                    部门内员工间记忆隔离
+部门共享知识库           →   viking://resources/     (Account 内所有员工可访问)
+员工私有记忆/对话        →   viking://user/{uid}/    (仅本人可访问)
+员工的某个 AI Agent     →   viking://agent/{hash}/  (仅本人+该 Agent 可访问)
 ```
 
 数据隔离规则：
 
 | 需求 | 实现机制 | 效果 |
 |------|---------|------|
-| 公司间隔离 | 文件路径自动加 `/{account_id}/` 前缀；向量查询自动加 `account_id` 过滤 | 公司 A 完全看不到公司 B 的任何数据 |
-| 用户间隔离 | `user/`、`agent/`、`session/` 目录按空间归属检查；向量查询按 `owner_space` 过滤 | 同公司内 alice 看不到 bob 的记忆 |
-| 用户访问公司知识库 | `resources/` 目录对账户内所有用户开放；向量查询中 resource 类型包含共享空间 | alice 和 bob 都能搜到公司文档 |
+| 部门间隔离 | 文件路径自动加 `/{account_id}/` 前缀；向量查询自动加 `account_id` 过滤 | 部门 A 完全看不到部门 B 的任何数据 |
+| 员工间隔离 | `user/`、`agent/`、`session/` 目录按空间归属检查；向量查询按 `owner_space` 过滤 | 同部门内 alice 看不到 bob 的记忆 |
+| 员工访问部门知识库 | `resources/` 目录对账户内所有员工开放；向量查询中 resource 类型包含共享空间 | alice 和 bob 都能搜到部门文档 |
 
-**所有隔离都是 OpenViking 自动完成的，上层应用只需要传对 API Key。**
+**部门间隔离 + 员工间隔离都是 OpenViking 自动完成的，上层应用只需要传对 API Key。**
 
 ---
 
@@ -66,11 +67,11 @@ curl http://localhost:1933/health
 
 ---
 
-## 三、管理面：公司和用户的生命周期
+## 三、管理面：部门和员工的生命周期
 
-管理操作需要 ROOT Key，对应上层应用中的后台管理逻辑。
+公司后端持有 ROOT Key，用于管理部门（Account）。部门管理员（ADMIN）管理本部门员工。
 
-### 3.1 公司入驻 → 创建 Account
+### 3.1 新建部门 → 创建 Account
 
 ```python
 import httpx
@@ -79,35 +80,35 @@ OV_URL = "http://openviking-server:1933"
 ROOT_KEY = "你的 root_api_key"
 ROOT_HEADERS = {"X-API-Key": ROOT_KEY}
 
-def on_company_created(company_id: str, first_admin_username: str) -> str:
-    """上层应用创建公司时调用。返回该公司管理员的 OpenViking User Key。"""
+def on_department_created(dept_id: str, dept_admin_username: str) -> str:
+    """公司后端创建部门时调用。返回部门管理员的 OpenViking User Key。"""
     resp = httpx.post(
         f"{OV_URL}/api/v1/admin/accounts",
         headers=ROOT_HEADERS,
         json={
-            "account_id": company_id,
-            "admin_user_id": first_admin_username,
+            "account_id": dept_id,
+            "admin_user_id": dept_admin_username,
         },
     )
     resp.raise_for_status()
     return resp.json()["result"]["user_key"]  # ← 保存到上层应用数据库
 ```
 
-### 3.2 员工加入 → 注册 User
+### 3.2 员工加入部门 → 注册 User
 
-由公司管理员（ADMIN）创建员工，无需使用 ROOT Key：
+由部门管理员（ADMIN）创建员工，无需使用 ROOT Key：
 
 ```python
-def on_user_joined(admin_key: str, company_id: str, user_id: str, role: str = "user") -> str:
-    """公司管理员添加员工时调用。返回该用户的 OpenViking User Key。
+def on_employee_joined(admin_key: str, dept_id: str, user_id: str, role: str = "user") -> str:
+    """部门管理员添加员工时调用。返回该员工的 OpenViking User Key。
 
-    admin_key: 该公司管理员的 User Key
+    admin_key: 该部门管理员的 User Key
     role 可选值：
-    - "user":  普通用户，只能访问自己的空间 + 公司共享知识库
-    - "admin": 公司管理员，可以管理本公司的用户
+    - "user":  普通员工，只能访问自己的空间 + 部门共享知识库
+    - "admin": 部门管理员，可以管理本部门的员工
     """
     resp = httpx.post(
-        f"{OV_URL}/api/v1/admin/accounts/{company_id}/users",
+        f"{OV_URL}/api/v1/admin/accounts/{dept_id}/users",
         headers={"X-API-Key": admin_key},
         json={"user_id": user_id, "role": role},
     )
@@ -115,27 +116,27 @@ def on_user_joined(admin_key: str, company_id: str, user_id: str, role: str = "u
     return resp.json()["result"]["user_key"]  # ← 保存到上层应用数据库
 ```
 
-> ROOT Key 同样可以调用此接口，但推荐由公司 ADMIN 管理自己的员工，符合最小权限原则。
+> ROOT Key 同样可以调用此接口，但推荐由部门 ADMIN 管理自己的员工，符合最小权限原则。
 
-### 3.3 员工离开 → 删除 User
+### 3.3 员工离开部门 → 删除 User
 
 ```python
-def on_user_left(admin_key: str, company_id: str, user_id: str):
-    """公司管理员移除员工时调用。该用户的 Key 立即失效。"""
+def on_employee_left(admin_key: str, dept_id: str, user_id: str):
+    """部门管理员移除员工时调用。该员工的 Key 立即失效。"""
     resp = httpx.delete(
-        f"{OV_URL}/api/v1/admin/accounts/{company_id}/users/{user_id}",
+        f"{OV_URL}/api/v1/admin/accounts/{dept_id}/users/{user_id}",
         headers={"X-API-Key": admin_key},
     )
     resp.raise_for_status()
 ```
 
-### 3.4 公司注销 → 删除 Account
+### 3.4 撤销部门 → 删除 Account
 
 ```python
-def on_company_removed(company_id: str):
-    """公司注销时调用。级联删除：所有用户 Key + 文件 + 向量数据。"""
+def on_department_removed(dept_id: str):
+    """撤销部门时调用。级联删除：所有员工 Key + 文件 + 向量数据。"""
     resp = httpx.delete(
-        f"{OV_URL}/api/v1/admin/accounts/{company_id}",
+        f"{OV_URL}/api/v1/admin/accounts/{dept_id}",
         headers=ROOT_HEADERS,
     )
     resp.raise_for_status()
@@ -145,16 +146,16 @@ def on_company_removed(company_id: str):
 
 | 操作 | 接口 | 权限 |
 |------|------|------|
-| 列出所有公司 | `GET /api/v1/admin/accounts` | ROOT |
-| 列出公司内用户 | `GET /api/v1/admin/accounts/{company_id}/users` | ROOT, ADMIN |
-| 变更用户角色 | `PUT /api/v1/admin/accounts/{company_id}/users/{uid}/role` | ROOT |
-| 重新生成 Key | `POST /api/v1/admin/accounts/{company_id}/users/{uid}/key` | ROOT, ADMIN |
+| 列出所有部门 | `GET /api/v1/admin/accounts` | ROOT |
+| 列出部门内员工 | `GET /api/v1/admin/accounts/{dept_id}/users` | ROOT, ADMIN |
+| 变更员工角色 | `PUT /api/v1/admin/accounts/{dept_id}/users/{uid}/role` | ROOT |
+| 重新生成 Key | `POST /api/v1/admin/accounts/{dept_id}/users/{uid}/key` | ROOT, ADMIN |
 
 ---
 
-## 四、业务面：用户日常操作
+## 四、业务面：员工日常操作
 
-业务调用只需要在 Header 中带上该用户的 Key。OpenViking 自动从 Key 解析出 company + user 身份，自动隔离数据。
+业务调用只需要在 Header 中带上该员工的 Key。OpenViking 自动从 Key 解析出部门 + 员工身份，自动隔离数据。
 
 ```python
 def make_headers(user_key: str, agent_id: str = "default") -> dict:
@@ -165,13 +166,13 @@ def make_headers(user_key: str, agent_id: str = "default") -> dict:
     return headers
 ```
 
-### 4.1 导入公司知识库
+### 4.1 导入部门知识库
 
-公司管理员（ADMIN）把文档导入 `resources/`，全公司可搜索：
+部门管理员（ADMIN）把文档导入 `resources/`，全部门可搜索：
 
 ```python
-def upload_company_doc(admin_key: str, file_path: str):
-    """管理员上传公司文档。存入 resources/，全公司可访问。"""
+def upload_dept_doc(admin_key: str, file_path: str):
+    """部门管理员上传文档。存入 resources/，本部门全员可访问。"""
     # 先上传文件
     headers = make_headers(admin_key)
     with open(file_path, "rb") as f:
@@ -193,11 +194,11 @@ def upload_company_doc(admin_key: str, file_path: str):
 
 ### 4.2 语义搜索
 
-用户搜索时，自动范围 = **公司共享知识库 + 用户私有记忆**：
+员工搜索时，自动范围 = **部门共享知识库 + 员工私有记忆**：
 
 ```python
 def search(user_key: str, query: str, session_id: str = None, limit: int = 5):
-    """语义搜索。自动包含公司知识库和用户私有记忆。"""
+    """语义搜索。自动包含部门知识库和员工私有记忆。"""
     headers = make_headers(user_key)
     body = {"query": query, "limit": limit}
     if session_id:
@@ -228,7 +229,7 @@ def add_message(user_key: str, session_id: str, role: str, content: str):
 def commit_session(user_key: str, session_id: str):
     """对话结束后提交。自动：归档对话 + 提取长期记忆。
 
-    提取的记忆存入用户私有空间，只有该用户能搜到。
+    提取的记忆存入员工私有空间，只有该员工能搜到。
     """
     httpx.post(
         f"{OV_URL}/api/v1/sessions/{session_id}/commit",
@@ -241,7 +242,7 @@ def commit_session(user_key: str, session_id: str):
 ```python
 headers = make_headers(user_key)
 
-# 列出公司知识库目录
+# 列出部门知识库目录
 httpx.get(f"{OV_URL}/api/v1/fs/ls", headers=headers, params={"uri": "viking://resources/"})
 
 # 读文档摘要（几句话）
@@ -292,12 +293,12 @@ async def example(user_key: str):
 
 ## 五、数据空间详解
 
-一个公司（Account）内部的数据布局：
+一个部门（Account）内部的数据布局：
 
 ```
 viking://                              可见性
-├── resources/                         公司全员可读写
-│   ├── 公司手册.pdf                   ← 公司共享知识库
+├── resources/                         部门全员可读写
+│   ├── 部门手册.pdf                   ← 部门共享知识库
 │   ├── 产品文档/
 │   └── FAQ.md
 │
@@ -323,14 +324,15 @@ viking://                              可见性
 搜索时 OpenViking 根据身份自动决定范围：
 
 ```
-alice 搜索 "报销流程"
+alice（研发部）搜索 "报销流程"
   → 文件系统: resources/* ✓  user/alice/* ✓  user/bob/* ✗
-  → 向量数据库: WHERE account_id='公司A'
+  → 向量数据库: WHERE account_id='研发部'
                  AND (
                    (context_type='resource' AND owner_space IN ('alice', 'agent_hash', ''))
                    OR
                    (context_type='memory'   AND owner_space IN ('alice', 'agent_hash'))
                  )
+  → 完全搜不到市场部的任何数据（不同 Account，硬隔离）
 ```
 
 ---
@@ -339,27 +341,27 @@ alice 搜索 "报销流程"
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│                     上层应用后端                            │
+│                     公司后端                                │
 │                                                            │
-│  环境变量: OPENVIKING_ROOT_KEY=xxx                         │
+│  环境变量: OPENVIKING_ROOT_KEY=xxx （公司级，管理所有部门） │
 │                                                            │
 │  数据库表: openviking_keys                                 │
 │  ┌──────────────┬───────────┬──────────────────────┐       │
-│  │ company_id   │ user_id   │ ov_user_key          │       │
+│  │ dept_id      │ user_id   │ ov_user_key          │       │
 │  ├──────────────┼───────────┼──────────────────────┤       │
-│  │ acme         │ alice     │ a3f8...              │       │
-│  │ acme         │ bob       │ 7c2d...              │       │
-│  │ beta         │ charlie   │ e91a...              │       │
+│  │ rd_dept      │ alice     │ a3f8...              │       │
+│  │ rd_dept      │ bob       │ 7c2d...              │       │
+│  │ mkt_dept     │ charlie   │ e91a...              │       │
 │  └──────────────┴───────────┴──────────────────────┘       │
 │                                                            │
 │  调用 OpenViking 时:                                        │
-│    key = db.get_ov_key(company_id, user_id)                │
+│    key = db.get_ov_key(dept_id, user_id)                   │
 │    headers = {"X-API-Key": key}                            │
 └────────────────────────────────────────────────────────────┘
 ```
 
-- **Root Key**: 通过环境变量注入，仅后端管理逻辑使用，不暴露给前端
-- **User Key**: 创建用户时拿到，存入数据库；每次调 OpenViking 时查出来放 Header
+- **Root Key**: 通过环境变量注入，公司后端管理逻辑使用（创建/删除部门），不暴露给前端
+- **User Key**: 创建员工时拿到，存入数据库；每次调 OpenViking 时查出来放 Header
 - **Key 轮换**: 调 `POST /admin/.../key` 后旧 Key 立即失效，需同步更新数据库
 
 ---
@@ -378,7 +380,7 @@ headers_da = {"X-API-Key": alice_key, "X-OpenViking-Agent": "data-analysis"}
 
 两个 Agent 各自拥有**独立的 agent 记忆**，但共享：
 - alice 的 user 级私有记忆
-- 公司的 resources 知识库
+- 部门的 resources 知识库
 
 如果上层应用没有多 Agent 场景，不传此 Header 即可（默认为 `"default"`）。
 
@@ -390,34 +392,35 @@ headers_da = {"X-API-Key": alice_key, "X-OpenViking-Agent": "data-analysis"}
 时间线 ──────────────────────────────────────────────────────────────>
 
 1. 部署
-   启动 OpenViking Server，配好 root_api_key
+   启动 OpenViking Server，配好 root_api_key（公司后端持有）
 
-2. 公司 A 入驻
-   POST /admin/accounts  {"account_id": "A", "admin_user_id": "admin_a"}
-   → 拿到 admin_a_key，存入数据库
+2. 创建研发部
+   POST /admin/accounts  {"account_id": "rd_dept", "admin_user_id": "dept_admin"}
+   (用 ROOT Key)
+   → 拿到 dept_admin_key，存入数据库
 
-3. 管理员为公司 A 添加员工 alice
-   POST /admin/accounts/A/users  {"user_id": "alice", "role": "user"}
-   (用 admin_a_key，公司管理员创建员工)
+3. 部门管理员添加员工 alice
+   POST /admin/accounts/rd_dept/users  {"user_id": "alice", "role": "user"}
+   (用 dept_admin_key，部门管理员创建员工)
    → 拿到 alice_key，存入数据库
 
-4. 管理员导入公司文档
-   POST /resources  (用 admin_a_key)
-   → 文档进入 resources/，公司全员可搜
+4. 部门管理员导入部门文档
+   POST /resources  (用 dept_admin_key)
+   → 文档进入 resources/，研发部全员可搜
 
 5. alice 日常使用
    POST /search/search  (用 alice_key, query="报销流程")
-   → 搜到公司文档 + alice 的私有记忆，搜不到 bob 的
+   → 搜到研发部文档 + alice 的私有记忆，搜不到 bob 的，也搜不到市场部的
 
    POST /sessions + /messages + /commit  (用 alice_key)
    → 对话记忆存入 alice 私有空间
 
-6. alice 离开公司 A
-   DELETE /admin/accounts/A/users/alice
+6. alice 离开研发部
+   DELETE /admin/accounts/rd_dept/users/alice
    → alice_key 立即失效，私有数据清理
 
-7. 公司 A 注销
-   DELETE /admin/accounts/A
+7. 撤销研发部
+   DELETE /admin/accounts/rd_dept  (用 ROOT Key)
    → 级联清理所有数据（文件 + 向量 + 全部 Key）
 ```
 
@@ -425,27 +428,28 @@ headers_da = {"X-API-Key": alice_key, "X-OpenViking-Agent": "data-analysis"}
 
 ## 九、注意事项
 
-1. **隔离是自动的**：业务 API 不需要传 company_id 或 user_id，Key 里已经包含身份信息
-2. **开发模式**：不配 `root_api_key` 时跳过认证，方便本地开发调试
-3. **幂等性**：重复创建同名 Account/User 返回 409 `AlreadyExistsError`，上层需处理
-4. **ROOT 调试**：ROOT Key 可以通过 `X-OpenViking-Account` + `X-OpenViking-User` Header 模拟任意身份，便于排查问题
+1. **隔离是自动的**：业务 API 不需要传 dept_id 或 user_id，Key 里已经包含身份信息
+2. **部门间完全隔离**：不同部门（Account）的数据互不可见，没有跨部门共享机制
+3. **开发模式**：不配 `root_api_key` 时跳过认证，方便本地开发调试
+4. **幂等性**：重复创建同名 Account/User 返回 409 `AlreadyExistsError`，上层需处理
+5. **ROOT 调试**：ROOT Key 可以通过 `X-OpenViking-Account` + `X-OpenViking-User` Header 模拟任意身份，便于排查问题
 
 ---
 
 ## 附：Admin API 速查表
 
 ```
-# 公司管理（ROOT only）
-POST   /api/v1/admin/accounts                              创建公司
-GET    /api/v1/admin/accounts                              列出所有公司
-DELETE /api/v1/admin/accounts/{company_id}                  删除公司（级联）
+# 部门管理（ROOT only）
+POST   /api/v1/admin/accounts                              创建部门
+GET    /api/v1/admin/accounts                              列出所有部门
+DELETE /api/v1/admin/accounts/{dept_id}                     删除部门（级联）
 
-# 用户管理（ROOT 或本公司 ADMIN）
-POST   /api/v1/admin/accounts/{company_id}/users            注册用户
-GET    /api/v1/admin/accounts/{company_id}/users            列出用户
-DELETE /api/v1/admin/accounts/{company_id}/users/{uid}      删除用户
-PUT    /api/v1/admin/accounts/{company_id}/users/{uid}/role 变更角色 (ROOT only)
-POST   /api/v1/admin/accounts/{company_id}/users/{uid}/key  重新生成 Key
+# 员工管理（ROOT 或本部门 ADMIN）
+POST   /api/v1/admin/accounts/{dept_id}/users               注册员工
+GET    /api/v1/admin/accounts/{dept_id}/users               列出员工
+DELETE /api/v1/admin/accounts/{dept_id}/users/{uid}         删除员工
+PUT    /api/v1/admin/accounts/{dept_id}/users/{uid}/role    变更角色 (ROOT only)
+POST   /api/v1/admin/accounts/{dept_id}/users/{uid}/key     重新生成 Key
 ```
 
 ## 附：业务 API 速查表
