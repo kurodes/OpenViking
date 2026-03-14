@@ -95,31 +95,36 @@ def on_company_created(company_id: str, first_admin_username: str) -> str:
 
 ### 3.2 员工加入 → 注册 User
 
-```python
-def on_user_joined(company_id: str, user_id: str, role: str = "user") -> str:
-    """上层应用中用户加入公司时调用。返回该用户的 OpenViking User Key。
+由公司管理员（ADMIN）创建员工，无需使用 ROOT Key：
 
+```python
+def on_user_joined(admin_key: str, company_id: str, user_id: str, role: str = "user") -> str:
+    """公司管理员添加员工时调用。返回该用户的 OpenViking User Key。
+
+    admin_key: 该公司管理员的 User Key
     role 可选值：
     - "user":  普通用户，只能访问自己的空间 + 公司共享知识库
     - "admin": 公司管理员，可以管理本公司的用户
     """
     resp = httpx.post(
         f"{OV_URL}/api/v1/admin/accounts/{company_id}/users",
-        headers=ROOT_HEADERS,
+        headers={"X-API-Key": admin_key},
         json={"user_id": user_id, "role": role},
     )
     resp.raise_for_status()
     return resp.json()["result"]["user_key"]  # ← 保存到上层应用数据库
 ```
 
+> ROOT Key 同样可以调用此接口，但推荐由公司 ADMIN 管理自己的员工，符合最小权限原则。
+
 ### 3.3 员工离开 → 删除 User
 
 ```python
-def on_user_left(company_id: str, user_id: str):
-    """用户离开公司时调用。该用户的 Key 立即失效。"""
+def on_user_left(admin_key: str, company_id: str, user_id: str):
+    """公司管理员移除员工时调用。该用户的 Key 立即失效。"""
     resp = httpx.delete(
         f"{OV_URL}/api/v1/admin/accounts/{company_id}/users/{user_id}",
-        headers=ROOT_HEADERS,
+        headers={"X-API-Key": admin_key},
     )
     resp.raise_for_status()
 ```
@@ -391,8 +396,9 @@ headers_da = {"X-API-Key": alice_key, "X-OpenViking-Agent": "data-analysis"}
    POST /admin/accounts  {"account_id": "A", "admin_user_id": "admin_a"}
    → 拿到 admin_a_key，存入数据库
 
-3. alice 加入公司 A
+3. 管理员为公司 A 添加员工 alice
    POST /admin/accounts/A/users  {"user_id": "alice", "role": "user"}
+   (用 admin_a_key，公司管理员创建员工)
    → 拿到 alice_key，存入数据库
 
 4. 管理员导入公司文档
